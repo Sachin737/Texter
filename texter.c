@@ -1,19 +1,36 @@
+/*----- includes -----*/
+
 #include <unistd.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <termios.h>
 #include <ctype.h>
+#include <errno.h>
 
-
+/*----- global data -----*/
 struct termios orig_termios; // terminal attributes (basically terminal settings' attr)can be read in termios struct
+
+
+/*----- terminal functions -----*/
+void die(const char* s){
+    // every C lib func has errno, perror looks for that and print message given at that no. index.
+    // can also print string s.
+    perror(s);
+    exit(1); // return 1 means failure
+}
 
 void disableRawMode() {
     // to apply terminal setting for standard input (STDIN_FILENO) to original state.
-  tcsetattr(STDIN_FILENO, TCSAFLUSH, &orig_termios); 
+  if(tcsetattr(STDIN_FILENO, TCSAFLUSH, &orig_termios) == -1){
+    die("tcsetattr");
+  } 
 }
 
 void enableRawMode() {
-    tcgetattr(STDIN_FILENO, &orig_termios); // read current terminal attr 
+    if(tcgetattr(STDIN_FILENO, &orig_termios) == -1){
+        die("tcgetattr");
+    } // read current terminal attr 
+    
     atexit(disableRawMode);
 
     struct termios raw = orig_termios;
@@ -46,11 +63,18 @@ void enableRawMode() {
     raw.c_lflag &= ~(ECHO | ICANON | ISIG | IEXTEN); 
     raw.c_cflag |= (CS8);
 
+    raw.c_cc[VMIN] = 0; // minimum #bits needed before read() can return
+    raw.c_cc[VTIME] = 50; // total input time window before read() return 0 (in 1/10 th of seconds).
+
     // to apply terminal setting for standard input (STDIN_FILENO) to content of raw
     // TCSAFLUSH: this option flushes any ip/op present and immediately apply new terminal attr!
-    tcsetattr(STDIN_FILENO, TCSAFLUSH, &raw); 
+    if(tcsetattr(STDIN_FILENO, TCSAFLUSH, &raw) == -1){
+        die("tcsetattr");
+    } 
 }
 
+
+/*----- main -----*/
 
 int main(){
     // In raw mode, each character is processed immediately as it's typed, 
@@ -59,11 +83,14 @@ int main(){
     // (e.g., using backspace) until they press Enter to submit the line. 
     enableRawMode();
     
-    char c;
-    
     while (1){
         char c = '\0';
-        read(STDIN_FILENO, &c, 1);
+
+        // when read() times out it returns -1 with an errno of EAGAIN, so
+        // its not an error actually! thus we avoid it
+        if(read(STDIN_FILENO, &c, 1) == -1 && errno != EAGAIN){
+            die("read");
+        }
 
         // it checks for control chars.
         // Control characters are nonprintable characters.
@@ -72,7 +99,7 @@ int main(){
         }else{
             printf("%d (%c)\r\n", c, c);
         }
-        
+
         if(c != 'q'){
             break;
         }
