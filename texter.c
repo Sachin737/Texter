@@ -28,9 +28,11 @@ struct editorConfig Ed;
 
 enum editorKey {
     ARROW_LEFT = 100001,
-    ARROW_RIGHT = 100002,
-    ARROW_UP = 100003,
-    ARROW_DOWN = 100004
+    ARROW_RIGHT,
+    ARROW_UP,
+    ARROW_DOWN,
+    PAGE_UP,
+    PAGE_DOWN
 };
 
 
@@ -124,12 +126,24 @@ int editorReadKey(){
         if (read(STDIN_FILENO, &s[0], 1) != 1) return '\x1b';
         if (read(STDIN_FILENO, &s[1], 1) != 1) return '\x1b';
 
+        // handling escape seq press!
         if (s[0] == '[') {
-            switch (s[1]) {
-                case 'A': return ARROW_UP;
-                case 'B': return ARROW_DOWN;
-                case 'C': return ARROW_RIGHT;
-                case 'D': return ARROW_LEFT;
+
+            if(s[1]>='0' && s[1]<='9'){ // handling pageUp/Down button
+                if (read(STDIN_FILENO, &s[2], 1) != 1) return '\x1b';
+                    if (s[2] == '~') {
+                        switch (s[1]) {
+                            case '5': return PAGE_UP;
+                            case '6': return PAGE_DOWN;
+                        }
+                    }
+            }else{ // handling arrow keys
+                switch (s[1]) {
+                    case 'A': return ARROW_UP;
+                    case 'B': return ARROW_DOWN;
+                    case 'C': return ARROW_RIGHT;
+                    case 'D': return ARROW_LEFT;
+                }
             }
         }
         return '\x1b';
@@ -220,16 +234,24 @@ void AP_free(struct AP_buf *b) {
 void editorMoveCursor(int key) {
   switch (key) {
     case ARROW_UP:
-      Ed.cy--;
+      if(Ed.cy > 0){
+        Ed.cy--;
+      }
       break;
     case ARROW_LEFT:
-      Ed.cx--;
+      if(Ed.cx > 0){
+        Ed.cx--;
+      }
       break;
     case ARROW_DOWN:
-      Ed.cy++;
+      if(Ed.cy < Ed.screenRows - 1){
+        Ed.cy++;
+      }
       break;
     case ARROW_RIGHT:
-      Ed.cx++;
+      if(Ed.cx < Ed.screenCols - 1){
+        Ed.cx++;
+      }
       break;
   }
 }
@@ -254,6 +276,15 @@ void editorProcessKey(){
         case ARROW_RIGHT:
             editorMoveCursor(c);
             break;
+        
+        case PAGE_UP:
+        case PAGE_DOWN:
+        {
+            int total = Ed.screenRows;
+            while (total--)
+                editorMoveCursor(c == PAGE_UP ? ARROW_UP : ARROW_DOWN);
+        }
+        break;
     }
 }
 
