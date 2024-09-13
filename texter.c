@@ -7,7 +7,7 @@
 #include <ctype.h>
 #include <errno.h>
 #include <sys/ioctl.h>
-
+#include <string.h>
 
 /*----- global data -----*/
 
@@ -15,20 +15,31 @@ struct editorConfig {
     struct termios orig_termios; // terminal attributes (basically terminal settings' attr)can be read in termios struct
     int screenRows;
     int screenCols;
+    int cx, cy; // curX, curY positions
 };
 
 struct editorConfig Ed;
 
-/*----- re-definition-----*/
+/*----- defines -----*/
 
 #define CTRL_KEY(k) ((k) & 0x1f) // Ctrl key actually do this only! 
+#define AP_BUF_INIT {NULL, 0}
+#define TEXTER_VERSION "0.0.1"
+
+enum editorKey {
+    ARROW_LEFT = 100001,
+    ARROW_RIGHT = 100002,
+    ARROW_UP = 100003,
+    ARROW_DOWN = 100004
+};
+
 
 /*----- terminal functions -----*/
 
 void die(const char* s){
     // to adjust cursor position and screen clear when program stops
     write(STDOUT_FILENO, "\x1b[2J", 4);
-    write(STDOUT_FILENO, "\x1b[1;1H", 3);
+    write(STDOUT_FILENO, "\x1b[H", 3);
     
     // every C lib func has errno, perror looks for that and print message given at that no. index.
     // can also print string s.
@@ -90,7 +101,7 @@ void enableRawMode() {
     } 
 }
 
-char editorReadKey(){
+int editorReadKey(){
     int readn;
     char c;
     while((readn = read(STDERR_FILENO, &c, 1)) != 1){
@@ -98,11 +109,39 @@ char editorReadKey(){
             die("read");
         }
     }
-    return c;
+
+    /*
+        reading escape seq: '\x1b[?'
+        this type of escape seq is send to our program 
+        when we press arrow keys. so we are just mapping
+        it to w,s,a,d
+    */
+
+    if(c == '\x1b'){
+        char s[3];
+
+        // if we have input size < 3: return '\x1b'
+        if (read(STDIN_FILENO, &s[0], 1) != 1) return '\x1b';
+        if (read(STDIN_FILENO, &s[1], 1) != 1) return '\x1b';
+
+        if (s[0] == '[') {
+            switch (s[1]) {
+                case 'A': return ARROW_UP;
+                case 'B': return ARROW_DOWN;
+                case 'C': return ARROW_RIGHT;
+                case 'D': return ARROW_LEFT;
+            }
+        }
+        return '\x1b';
+    }else{
+        return c;
+
+    }
+
 }
 
 int getCursorPosition(int *rows, int *cols){
-    // The n command can be used to query the terminal for status information (arg 6 return window size).
+    // The n command can be used to query the terminal for status information (arg 6 used to return window size (status)).
     if (write(STDOUT_FILENO, "\x1b[6n", 4) != 4) return -1;
     
 
@@ -155,57 +194,131 @@ int getWindowSize(int *rows, int *cols) {
     }
 }
 
+/*-----  append buffer  -----*/
+
+struct AP_buf {
+    char *buf;
+    int len;
+};
+
+void AP_append(struct AP_buf *b, char *s, int len){
+    char *temp = realloc(b->buf, b->len+len); // temp has larger mem block with initial data same as b->buf.
+    if (temp==NULL) return;
+
+    memcpy(&temp[b->len],s,len); // now taking s to back of temp string.
+
+    b->buf = temp;
+    b->len = b->len + len; 
+}
+
+void AP_free(struct AP_buf *b) {
+    free(b->buf);
+}
+
 /*----- input processing -----*/
 
+void editorMoveCursor(int key) {
+  switch (key) {
+    case ARROW_UP:
+      Ed.cy--;
+      break;
+    case ARROW_LEFT:
+      Ed.cx--;
+      break;
+    case ARROW_DOWN:
+      Ed.cy++;
+      break;
+    case ARROW_RIGHT:
+      Ed.cx++;
+      break;
+  }
+}
+
+
 void editorProcessKey(){
-    char c = editorReadKey();
+    int c = editorReadKey();
 
     // Processing key presses
     switch (c){
         case CTRL_KEY('q'):
             // to adjust cursor position and screen clear when program stops
             write(STDOUT_FILENO, "\x1b[2J", 4);
-            write(STDOUT_FILENO, "\x1b[1;1H", 3);    
+            write(STDOUT_FILENO, "\x1b[H", 3);    
 
             exit(0);
             break;
+        
+        case ARROW_UP:
+        case ARROW_DOWN:
+        case ARROW_LEFT:
+        case ARROW_RIGHT:
+            editorMoveCursor(c);
+            break;
     }
-
 }
 
 /*----- output processing ----- */
 
-void editorDrawRows(){
-    for(int i=0;i<Ed.screenRows;i++){
-        if(i < Ed.screenRows - 1){
-            write(STDOUT_FILENO, "~\r\n", 3);
-        }else{
-            write(STDOUT_FILENO, "~", 1);
-        }
+void editorDrawRows(struct AP_buf *b) {
+  int y;
+  for (y = 0; y < Ed.screenRows; y++) {
+    if (y == Ed.screenRows / 3) {
+      char welcome[80];
+      int welcomelen = snprintf(welcome, sizeof(welcome),
+        "TEXTER -- version %s", TEXTER_VERSION);
+      if (welcomelen > Ed.screenCols) welcomelen = Ed.screenCols;
+
+      int padding = (Ed.screenCols - welcomelen) / 2;
+      if (padding) {
+        AP_append(b, "~", 1);
+        padding--;
+      }
+      while (padding--) AP_append(b, " ", 1);
+
+
+      AP_append(b, welcome, welcomelen);
+    } else {
+      AP_append(b, "~", 1);
     }
+    AP_append(b, "\x1b[K", 3);
+    if (y < Ed.screenRows - 1) {
+      AP_append(b, "\r\n", 2);
+    }
+  }
 }
 
 void editorRefreshScreen(){
-    // Escape sequences are used to put nonprintable characters in character and string literals
-    // such as backspace, tab, color, cursor locations etc.
+    /* 
+        Escape sequences are used to put nonprintable characters in character and string literals
+        such as backspace, tab, color, cursor locations etc.
+    */
 
-    // '\x1b is escape character, and read about '[2J' here:
-    // https://vt100.net/docs/vt100-ug/chapter3.html#ED
-    write(STDOUT_FILENO, "\x1b[2J", 4);  
+    struct AP_buf b = AP_BUF_INIT;
+    AP_append(&b, "\x1b[?25l", 6); // disable pointer
 
     // this will adjust the cursor position to top-left
     // read here about '[H': https://vt100.net/docs/vt100-ug/chapter3.html#CUP
-    write(STDOUT_FILENO, "\x1b[H", 3);
+    AP_append(&b, "\x1b[H", 3);
 
-    editorDrawRows();
+    editorDrawRows(&b);
 
-    write(STDOUT_FILENO, "\x1b[H", 3);
+    char buf[32];
+    snprintf(buf, sizeof(buf), "\x1b[%d;%dH", Ed.cy + 1, Ed.cx + 1);
+    AP_append(&b, buf, strlen(buf));
+
+    AP_append(&b, "\x1b[?25h", 6); // enable pointer
+
+    write(STDOUT_FILENO, b.buf, b.len); //finally writing buffer to stdout
+    
+    AP_free(&b);
 }
 
 
 /*----- main -----*/
 
 void initEditor() {
+    Ed.cx = 0;
+    Ed.cy = 0;
   if (getWindowSize(&Ed.screenRows, &Ed.screenCols) == -1) {
     die("getWindowSize");
   }
@@ -224,6 +337,7 @@ int main(){
     while (1){
         editorRefreshScreen();
         editorProcessKey();
+        // Ed.cx++;
     }
 
     return 0;
