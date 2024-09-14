@@ -8,14 +8,27 @@
 #include <errno.h>
 #include <sys/ioctl.h>
 #include <string.h>
+#include <sys/types.h>
+
 
 /*----- global data -----*/
+
+typedef struct erow
+{
+    int size;
+    char *data;
+} erow;
+
 
 struct editorConfig {
     struct termios orig_termios; // terminal attributes (basically terminal settings' attr)can be read in termios struct
     int screenRows;
     int screenCols;
     int cx, cy; // curX, curY positions
+
+    // stores single line input
+    int numRows;
+    erow row;
 };
 
 struct editorConfig Ed;
@@ -320,24 +333,33 @@ void editorProcessKey(){
 void editorDrawRows(struct AP_buf *b) {
   int y;
   for (y = 0; y < Ed.screenRows; y++) {
-    if (y == Ed.screenRows / 3) {
-      char welcome[80];
-      int welcomelen = snprintf(welcome, sizeof(welcome),
-        "TEXTER -- version %s", TEXTER_VERSION);
-      if (welcomelen > Ed.screenCols) welcomelen = Ed.screenCols;
+    if(y >= Ed.numRows){
+        // we only show wlcm msg when user open empty editor
+        if (y == Ed.screenRows / 3 && Ed.numRows == 0) {
+            char welcome[80];
+            int welcomelen = snprintf(welcome, sizeof(welcome),
+                "TEXTER -- version %s", TEXTER_VERSION);
+            if (welcomelen > Ed.screenCols) welcomelen = Ed.screenCols;
 
-      int padding = (Ed.screenCols - welcomelen) / 2;
-      if (padding) {
-        AP_append(b, "~", 1);
-        padding--;
-      }
-      while (padding--) AP_append(b, " ", 1);
+            int padding = (Ed.screenCols - welcomelen) / 2;
+            if (padding) {
+                AP_append(b, "~", 1);
+                padding--;
+            }
+            while (padding--) AP_append(b, " ", 1);
 
 
-      AP_append(b, welcome, welcomelen);
-    } else {
-      AP_append(b, "~", 1);
+            AP_append(b, welcome, welcomelen);
+        } else {
+            AP_append(b, "~", 1);
+        }
+    }else{
+        int len = Ed.row.size;
+        // truncate data lines to screenCols
+        if (len > Ed.screenCols) len = Ed.screenCols;
+        AP_append(b, Ed.row.data, len);
     }
+
     AP_append(b, "\x1b[K", 3);
     if (y < Ed.screenRows - 1) {
       AP_append(b, "\r\n", 2);
@@ -371,18 +393,54 @@ void editorRefreshScreen(){
     AP_free(&b);
 }
 
+/* ----- file-io ----- */
+
+void editorOpenFile(char *filename){
+    FILE *file_ptr;
+    char ch;
+
+    file_ptr = fopen(filename, "r");
+
+    if(file_ptr==NULL)die("fopen");
+
+    char *lineData = NULL;
+    ssize_t linelen = 0;
+    size_t linecap = 0; //stores current length of data stored in lineData.
+
+    linelen = getline(&lineData, &linecap, file_ptr);
+
+    if(linelen != -1){
+        // strip off the newline or carriage return at the end
+        while(linelen > 0 && (lineData[linelen-1]=='\n' || lineData[linelen-1]=='\r')){
+            linelen--;
+        }
+
+        // saving line to buffer
+        Ed.row.size=linelen;
+        Ed.row.data = malloc(linelen + 1);
+
+        memcpy(Ed.row.data, lineData, linelen);
+        Ed.row.data[linelen] = '\0';
+        Ed.numRows = 1;
+    }
+
+    free(lineData);
+    fclose(file_ptr);
+}
 
 /*----- main -----*/
 
 void initEditor() {
     Ed.cx = 0;
     Ed.cy = 0;
-  if (getWindowSize(&Ed.screenRows, &Ed.screenCols) == -1) {
-    die("getWindowSize");
-  }
+    Ed.numRows = 0;
+
+    if (getWindowSize(&Ed.screenRows, &Ed.screenCols) == -1) {
+        die("getWindowSize");
+    }
 }
 
-int main(){
+int main(int argc, char *argv[]){
     /*
         In raw mode, each character is processed immediately as it's typed, 
         allowing for real-time interaction without waiting for Enter. 
@@ -391,11 +449,14 @@ int main(){
     */
     enableRawMode();
     initEditor();
+
+    if(argc >=2){
+        editorOpenFile(argv[1]);
+    }
     
     while (1){
         editorRefreshScreen();
         editorProcessKey();
-        // Ed.cx++;
     }
 
     return 0;
