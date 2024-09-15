@@ -268,28 +268,58 @@ void AP_free(struct AP_buf *b) {
 /*----- input processing -----*/
 
 void editorMoveCursor(int key) {
-  switch (key) {
-    case ARROW_UP:
-      if(Ed.cy > 0){
-        Ed.cy--;
-      }
-      break;
-    case ARROW_LEFT:
-      if(Ed.cx > 0){
-        Ed.cx--;
-      }
-      break;
-    case ARROW_DOWN:
-      if(Ed.cy < Ed.numRows){ // to allow cursor to go till end of file instead just end of screen!
-        Ed.cy++;
-      }
-      break;
-    case ARROW_RIGHT:
-    //   if(Ed.cx < Ed.screenCols - 1){
-        Ed.cx++;
-    //   }
-      break;
-  }
+
+    // storing current row to avoid moving towards
+    // right of the content in line without pressing space.
+    erow *curRow = NULL;
+    if(Ed.cy < Ed.numRows){ //cursor on some file's line
+        curRow = &Ed.row[Ed.cy];
+    }
+
+    switch (key) {
+        case ARROW_UP:
+            if(Ed.cy > 0){
+                Ed.cy--;
+            }
+            break;
+
+        case ARROW_LEFT:
+            if(Ed.cx > 0){
+                Ed.cx--;
+            }else if(Ed.cy > 0){
+                Ed.cy--;
+                Ed.cx = Ed.row[Ed.cy].size;
+            }
+            break;
+
+        case ARROW_DOWN:
+            if(Ed.cy < Ed.numRows){ // to allow cursor to go till end of file instead just end of screen!
+                Ed.cy++;
+            }
+            break;
+            
+        case ARROW_RIGHT:
+            if(curRow){
+                if(Ed.cx < curRow->size){
+                    Ed.cx++;
+                }else if(Ed.cx == curRow->size){
+                    Ed.cy++;
+                    Ed.cx = 0;
+                }
+            }else{
+                // cant move right on empty line
+            }
+            break;
+    }
+
+    // But user can still move up or down with current x cords,
+    // and if that new row is shorter in length, its an issue!
+
+    if(Ed.cy < Ed.numRows){ //cursor on some file's line
+        curRow = &Ed.row[Ed.cy];
+    }else curRow = NULL;
+
+    if(curRow && Ed.cx > curRow->size)Ed.cx = curRow->size;
 }
 
 
