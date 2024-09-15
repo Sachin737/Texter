@@ -29,6 +29,9 @@ struct editorConfig {
     // stores file data
     int numRows;
     erow *row;
+
+    int scrollYOffset; // vertical scroll
+    int scrollXOffset; // horizontal scroll
 };
 
 struct editorConfig Ed;
@@ -277,14 +280,14 @@ void editorMoveCursor(int key) {
       }
       break;
     case ARROW_DOWN:
-      if(Ed.cy < Ed.screenRows - 1){
+      if(Ed.cy < Ed.numRows){ // to allow cursor to go till end of file instead just end of screen!
         Ed.cy++;
       }
       break;
     case ARROW_RIGHT:
-      if(Ed.cx < Ed.screenCols - 1){
+    //   if(Ed.cx < Ed.screenCols - 1){
         Ed.cx++;
-      }
+    //   }
       break;
   }
 }
@@ -333,7 +336,10 @@ void editorProcessKey(){
 void editorDrawRows(struct AP_buf *b) {
   int y;
   for (y = 0; y < Ed.screenRows; y++) {
-    if(y >= Ed.numRows){
+    int realY = y + Ed.scrollYOffset;
+
+    if(realY >= Ed.numRows){
+
         // we only show wlcm msg when user open empty editor
         if (y == Ed.screenRows / 3 && Ed.numRows == 0) {
             char welcome[80];
@@ -350,14 +356,17 @@ void editorDrawRows(struct AP_buf *b) {
 
 
             AP_append(b, welcome, welcomelen);
-        } else {
+        } else { // printing tildes
             AP_append(b, "~", 1);
         }
     }else{
-        int len = Ed.row[y].size;
+        int len = Ed.row[realY].size - Ed.scrollXOffset;
+
         // truncate data lines to screenCols
+        if(len < 0) len = 0;
         if (len > Ed.screenCols) len = Ed.screenCols;
-        AP_append(b, Ed.row[y].data, len);
+
+        AP_append(b, &Ed.row[realY].data[Ed.scrollXOffset], len);
     }
 
     AP_append(b, "\x1b[K", 3);
@@ -367,7 +376,39 @@ void editorDrawRows(struct AP_buf *b) {
   }
 }
 
+void editorScroll() {
+    // when we try to move up, it decreases the offsetY, 
+    // so that we can view code from that desired cursor pos.
+    if (Ed.cy < Ed.scrollYOffset) {
+        Ed.scrollYOffset = Ed.cy;
+    }
+
+    // same thing for scroll down, [to view content below when scrolling down]
+    if (Ed.cy >= Ed.scrollYOffset + Ed.screenRows) {
+        Ed.scrollYOffset = Ed.cy - Ed.screenRows + 1;
+    }
+
+    if (Ed.cx < Ed.scrollXOffset) {
+        Ed.scrollXOffset = Ed.cx;
+    }
+
+    // same thing for scroll down, [to view content below when scrolling down]
+    if (Ed.cx >= Ed.scrollXOffset + Ed.screenCols) {
+        Ed.scrollXOffset = Ed.cx - Ed.screenCols + 1;
+    }
+}
+
+/*
+    WHY?? 
+    If you try to scroll back up, you may notice the cursor isn’t being positioned properly.
+    That is because E.cy no longer refers to the position of the cursor on the screen. 
+    It refers to the position of the cursor within the text file. 
+    To position the cursor on the screen, we now have to subtract E.rowoff from the value of E.cy.
+*/
+
 void editorRefreshScreen(){
+    editorScroll();
+
     /* 
         Escape sequences are used to put nonprintable characters in character and string literals
         such as backspace, tab, color, cursor locations etc.
@@ -382,8 +423,9 @@ void editorRefreshScreen(){
 
     editorDrawRows(&b);
 
+    // to position the cursor according to our cursor pos variables.
     char buf[32];
-    snprintf(buf, sizeof(buf), "\x1b[%d;%dH", Ed.cy + 1, Ed.cx + 1);
+    snprintf(buf, sizeof(buf), "\x1b[%d;%dH", Ed.cy - Ed.scrollYOffset + 1, Ed.cx - Ed.scrollXOffset + 1);
     AP_append(&b, buf, strlen(buf));
 
     AP_append(&b, "\x1b[?25h", 6); // enable pointer
@@ -443,7 +485,10 @@ void initEditor() {
     Ed.cx = 0;
     Ed.cy = 0;
     Ed.numRows = 0;
-    Ed.row=NULL;
+    Ed.row=NULL;  
+    Ed.scrollXOffset = 0;
+    Ed.scrollYOffset = 0;
+
 
     if (getWindowSize(&Ed.screenRows, &Ed.screenCols) == -1) {
         die("getWindowSize");
