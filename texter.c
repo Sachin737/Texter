@@ -26,9 +26,9 @@ struct editorConfig {
     int screenCols;
     int cx, cy; // curX, curY positions
 
-    // stores single line input
+    // stores file data
     int numRows;
-    erow row;
+    erow *row;
 };
 
 struct editorConfig Ed;
@@ -354,10 +354,10 @@ void editorDrawRows(struct AP_buf *b) {
             AP_append(b, "~", 1);
         }
     }else{
-        int len = Ed.row.size;
+        int len = Ed.row[y].size;
         // truncate data lines to screenCols
         if (len > Ed.screenCols) len = Ed.screenCols;
-        AP_append(b, Ed.row.data, len);
+        AP_append(b, Ed.row[y].data, len);
     }
 
     AP_append(b, "\x1b[K", 3);
@@ -393,11 +393,25 @@ void editorRefreshScreen(){
     AP_free(&b);
 }
 
+/* ----- row operations -----*/
+
+void editorAppendLine(char *line, size_t len){
+    Ed.row = realloc(Ed.row, sizeof(erow) * (Ed.numRows + 1)); // allocating space for new line
+
+    int id = Ed.numRows;
+    Ed.numRows+=1;
+
+    Ed.row[id].size = len;    
+    
+    Ed.row[id].data = malloc(len + 1);
+    memcpy(Ed.row[id].data, line, len);
+    Ed.row[id].data[len]='\0';
+}
+
 /* ----- file-io ----- */
 
 void editorOpenFile(char *filename){
     FILE *file_ptr;
-    char ch;
 
     file_ptr = fopen(filename, "r");
 
@@ -407,21 +421,16 @@ void editorOpenFile(char *filename){
     ssize_t linelen = 0;
     size_t linecap = 0; //stores current length of data stored in lineData.
 
-    linelen = getline(&lineData, &linecap, file_ptr);
+    // linelen = ;
 
-    if(linelen != -1){
+    while((linelen = getline(&lineData, &linecap, file_ptr)) != -1){
         // strip off the newline or carriage return at the end
         while(linelen > 0 && (lineData[linelen-1]=='\n' || lineData[linelen-1]=='\r')){
             linelen--;
         }
 
         // saving line to buffer
-        Ed.row.size=linelen;
-        Ed.row.data = malloc(linelen + 1);
-
-        memcpy(Ed.row.data, lineData, linelen);
-        Ed.row.data[linelen] = '\0';
-        Ed.numRows = 1;
+        editorAppendLine(lineData,linelen);
     }
 
     free(lineData);
@@ -434,6 +443,7 @@ void initEditor() {
     Ed.cx = 0;
     Ed.cy = 0;
     Ed.numRows = 0;
+    Ed.row=NULL;
 
     if (getWindowSize(&Ed.screenRows, &Ed.screenCols) == -1) {
         die("getWindowSize");
