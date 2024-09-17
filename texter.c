@@ -17,6 +17,9 @@ typedef struct erow
 {
     int size;
     char *data;
+
+    int rSize;
+    char *renderData;
 } erow;
 
 
@@ -25,6 +28,7 @@ struct editorConfig {
     int screenRows;
     int screenCols;
     int cx, cy; // curX, curY positions
+    int rx; // curX position in renderData string
 
     // stores file data
     int numRows;
@@ -41,6 +45,7 @@ struct editorConfig Ed;
 #define CTRL_KEY(k) ((k) & 0x1f) // Ctrl key actually do this only! 
 #define AP_BUF_INIT {NULL, 0}
 #define TEXTER_VERSION "0.0.1"
+#define TAB_SIZE 7
 
 enum editorKey {
     ARROW_LEFT = 100001,
@@ -361,6 +366,67 @@ void editorProcessKey(){
     }
 }
 
+/* ----- row operations -----*/
+
+int editorCxToRx(erow *line, int cx){
+    int rx = 0;
+    for(int i=0;i<cx;i++){
+        if(line->data[i]=='\t'){
+            // since all tabs dont take full TAB_SIZE,
+            // we decrease that part.
+            rx += TAB_SIZE - rx%(TAB_SIZE+1); 
+        }
+        rx++;
+    }
+    return rx;
+}
+
+void editorUpdateRenderData(erow *line){
+    free(line->renderData);
+
+    int tabs = 0;
+    for(int i=0;i<line->size;i++){
+        if(line->data[i]=='\t')tabs++;
+    }
+
+    int len = line->size + tabs * TAB_SIZE + 1;
+    line->renderData = malloc(len);
+    int j = 0;
+    
+    for(int i=0;i<line->size;i++){
+        if(line->data[i]=='\t'){
+            int next_tab_stop = TAB_SIZE + 1;
+            
+            line->renderData[j++] = ' ';
+            while(j % next_tab_stop != 0)  {
+                line->renderData[j++] = ' ';
+            }
+        }else{
+            line->renderData[j++] = line->data[i];
+        }
+    }
+    line->renderData[j]='\0';
+    line->rSize = j;
+}
+
+void editorAppendLine(char *line, size_t len){
+    Ed.row = realloc(Ed.row, sizeof(erow) * (Ed.numRows + 1)); // allocating space for new line
+
+    int id = Ed.numRows;
+    Ed.numRows+=1;
+
+    Ed.row[id].size = len;    
+    
+    Ed.row[id].data = malloc(len + 1);
+    memcpy(Ed.row[id].data, line, len);
+    Ed.row[id].data[len]='\0';
+
+    Ed.row[id].rSize = 0;
+    Ed.row[id].renderData = NULL;
+
+    editorUpdateRenderData(&Ed.row[id]);
+}
+
 /*----- output processing ----- */
 
 void editorDrawRows(struct AP_buf *b) {
@@ -390,13 +456,13 @@ void editorDrawRows(struct AP_buf *b) {
             AP_append(b, "~", 1);
         }
     }else{
-        int len = Ed.row[realY].size - Ed.scrollXOffset;
+        int len = Ed.row[realY].rSize - Ed.scrollXOffset;
 
         // truncate data lines to screenCols
         if(len < 0) len = 0;
         if (len > Ed.screenCols) len = Ed.screenCols;
 
-        AP_append(b, &Ed.row[realY].data[Ed.scrollXOffset], len);
+        AP_append(b, &Ed.row[realY].renderData[Ed.scrollXOffset], len);
     }
 
     AP_append(b, "\x1b[K", 3);
@@ -407,6 +473,10 @@ void editorDrawRows(struct AP_buf *b) {
 }
 
 void editorScroll() {
+    // calculating rx using cx
+    Ed.rx = Ed.cx;
+    if(Ed.cy < Ed.numRows) Ed.rx = editorCxToRx(&Ed.row[Ed.cy], Ed.cx);
+
     // when we try to move up, it decreases the offsetY, 
     // so that we can view code from that desired cursor pos.
     if (Ed.cy < Ed.scrollYOffset) {
@@ -418,13 +488,13 @@ void editorScroll() {
         Ed.scrollYOffset = Ed.cy - Ed.screenRows + 1;
     }
 
-    if (Ed.cx < Ed.scrollXOffset) {
-        Ed.scrollXOffset = Ed.cx;
+    if (Ed.rx < Ed.scrollXOffset) {
+        Ed.scrollXOffset = Ed.rx;
     }
 
     // same thing for scroll down, [to view content below when scrolling down]
-    if (Ed.cx >= Ed.scrollXOffset + Ed.screenCols) {
-        Ed.scrollXOffset = Ed.cx - Ed.screenCols + 1;
+    if (Ed.rx >= Ed.scrollXOffset + Ed.screenCols) {
+        Ed.scrollXOffset = Ed.rx - Ed.screenCols + 1;
     }
 }
 
@@ -455,7 +525,7 @@ void editorRefreshScreen(){
 
     // to position the cursor according to our cursor pos variables.
     char buf[32];
-    snprintf(buf, sizeof(buf), "\x1b[%d;%dH", Ed.cy - Ed.scrollYOffset + 1, Ed.cx - Ed.scrollXOffset + 1);
+    snprintf(buf, sizeof(buf), "\x1b[%d;%dH", Ed.cy - Ed.scrollYOffset + 1, Ed.rx - Ed.scrollXOffset + 1);
     AP_append(&b, buf, strlen(buf));
 
     AP_append(&b, "\x1b[?25h", 6); // enable pointer
@@ -463,21 +533,6 @@ void editorRefreshScreen(){
     write(STDOUT_FILENO, b.buf, b.len); //finally writing buffer to stdout
     
     AP_free(&b);
-}
-
-/* ----- row operations -----*/
-
-void editorAppendLine(char *line, size_t len){
-    Ed.row = realloc(Ed.row, sizeof(erow) * (Ed.numRows + 1)); // allocating space for new line
-
-    int id = Ed.numRows;
-    Ed.numRows+=1;
-
-    Ed.row[id].size = len;    
-    
-    Ed.row[id].data = malloc(len + 1);
-    memcpy(Ed.row[id].data, line, len);
-    Ed.row[id].data[len]='\0';
 }
 
 /* ----- file-io ----- */
@@ -512,6 +567,7 @@ void editorOpenFile(char *filename){
 /*----- main -----*/
 
 void initEditor() {
+    Ed.rx = 0;
     Ed.cx = 0;
     Ed.cy = 0;
     Ed.numRows = 0;
