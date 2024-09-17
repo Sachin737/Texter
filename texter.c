@@ -34,8 +34,10 @@ struct editorConfig {
     int numRows;
     erow *row;
 
-    int scrollYOffset; // vertical scroll
-    int scrollXOffset; // horizontal scroll
+    char *filename; 
+
+    int scrollYOffset; // vertical scroll offset
+    int scrollXOffset; // horizontal scroll offset
 };
 
 struct editorConfig Ed;
@@ -43,7 +45,7 @@ struct editorConfig Ed;
 /*----- defines -----*/
 
 #define CTRL_KEY(k) ((k) & 0x1f) // Ctrl key actually do this only! 
-#define AP_BUF_INIT {NULL, 0}
+#define ab_BUF_INIT {NULL, 0}
 #define TEXTER_VERSION "0.0.1"
 #define TAB_SIZE 7
 
@@ -251,12 +253,12 @@ int getWindowSize(int *rows, int *cols) {
 
 /*-----  append buffer  -----*/
 
-struct AP_buf {
+struct ab_buf {
     char *buf;
     int len;
 };
 
-void AP_append(struct AP_buf *b, char *s, int len){
+void ab_append(struct ab_buf *b, char *s, int len){
     char *temp = realloc(b->buf, b->len+len); // temp has larger mem block with initial data same as b->buf.
     if (temp==NULL) return;
 
@@ -266,7 +268,7 @@ void AP_append(struct AP_buf *b, char *s, int len){
     b->len = b->len + len; 
 }
 
-void AP_free(struct AP_buf *b) {
+void ab_free(struct ab_buf *b) {
     free(b->buf);
 }
 
@@ -361,7 +363,8 @@ void editorProcessKey(){
             Ed.cx = 0;
             break;
         case END_KEY:
-            Ed.cx = Ed.screenCols - 1;
+            if (Ed.cy < Ed.numRows)
+                Ed.cx = Ed.row[Ed.cy].size;
             break;
     }
 }
@@ -429,7 +432,30 @@ void editorAppendLine(char *line, size_t len){
 
 /*----- output processing ----- */
 
-void editorDrawRows(struct AP_buf *b) {
+void editorDrawStatusBar(struct ab_buf *b){
+    ab_append(b, "\x1b[7m", 4); // negative image (here white bg)
+
+    // printing file name
+    char status[80], curStatus[80];
+    int len = snprintf(status, sizeof(status), "%.20s - %d lines", Ed.filename, Ed.numRows);
+    int rlen = snprintf(curStatus, sizeof(curStatus), "%d/%d", Ed.cy+1, Ed.numRows);
+     
+
+    ab_append(b, status, len);
+
+    while (len < Ed.screenCols) {
+        if (Ed.screenCols - len == rlen) {
+            ab_append(b, curStatus, rlen);
+            break;
+        } else {
+            ab_append(b, " ", 1);
+            len++;
+        }
+    }
+    ab_append(b, "\x1b[m", 3);
+}
+
+void editorDrawRows(struct ab_buf *b) {
   int y;
   for (y = 0; y < Ed.screenRows; y++) {
     int realY = y + Ed.scrollYOffset;
@@ -445,15 +471,15 @@ void editorDrawRows(struct AP_buf *b) {
 
             int padding = (Ed.screenCols - welcomelen) / 2;
             if (padding) {
-                AP_append(b, "~", 1);
+                ab_append(b, "~", 1);
                 padding--;
             }
-            while (padding--) AP_append(b, " ", 1);
+            while (padding--) ab_append(b, " ", 1);
 
 
-            AP_append(b, welcome, welcomelen);
+            ab_append(b, welcome, welcomelen);
         } else { // printing tildes
-            AP_append(b, "~", 1);
+            ab_append(b, "~", 1);
         }
     }else{
         int len = Ed.row[realY].rSize - Ed.scrollXOffset;
@@ -462,13 +488,11 @@ void editorDrawRows(struct AP_buf *b) {
         if(len < 0) len = 0;
         if (len > Ed.screenCols) len = Ed.screenCols;
 
-        AP_append(b, &Ed.row[realY].renderData[Ed.scrollXOffset], len);
+        ab_append(b, &Ed.row[realY].renderData[Ed.scrollXOffset], len);
     }
 
-    AP_append(b, "\x1b[K", 3);
-    if (y < Ed.screenRows - 1) {
-      AP_append(b, "\r\n", 2);
-    }
+    ab_append(b, "\x1b[K", 3);
+    ab_append(b, "\r\n", 2);
   }
 }
 
@@ -514,31 +538,34 @@ void editorRefreshScreen(){
         such as backspace, tab, color, cursor locations etc.
     */
 
-    struct AP_buf b = AP_BUF_INIT;
-    AP_append(&b, "\x1b[?25l", 6); // disable pointer
+    struct ab_buf b = ab_BUF_INIT;
+    ab_append(&b, "\x1b[?25l", 6); // disable pointer
 
     // this will adjust the cursor position to top-left
     // read here about '[H': https://vt100.net/docs/vt100-ug/chapter3.html#CUP
-    AP_append(&b, "\x1b[H", 3);
+    ab_append(&b, "\x1b[H", 3);
 
     editorDrawRows(&b);
+    editorDrawStatusBar(&b);
 
     // to position the cursor according to our cursor pos variables.
     char buf[32];
     snprintf(buf, sizeof(buf), "\x1b[%d;%dH", Ed.cy - Ed.scrollYOffset + 1, Ed.rx - Ed.scrollXOffset + 1);
-    AP_append(&b, buf, strlen(buf));
+    ab_append(&b, buf, strlen(buf));
 
-    AP_append(&b, "\x1b[?25h", 6); // enable pointer
+    ab_append(&b, "\x1b[?25h", 6); // enable pointer
 
     write(STDOUT_FILENO, b.buf, b.len); //finally writing buffer to stdout
     
-    AP_free(&b);
+    ab_free(&b);
 }
 
 /* ----- file-io ----- */
 
 void editorOpenFile(char *filename){
     FILE *file_ptr;
+
+    Ed.filename = strdup(filename);
 
     file_ptr = fopen(filename, "r");
 
@@ -574,11 +601,14 @@ void initEditor() {
     Ed.row=NULL;  
     Ed.scrollXOffset = 0;
     Ed.scrollYOffset = 0;
+    Ed.filename = "No Name";
 
 
     if (getWindowSize(&Ed.screenRows, &Ed.screenCols) == -1) {
         die("getWindowSize");
     }
+    Ed.screenRows -= 1;
+
 }
 
 int main(int argc, char *argv[]){
