@@ -9,7 +9,8 @@
 #include <sys/ioctl.h>
 #include <string.h>
 #include <sys/types.h>
-
+#include <time.h>
+#include <stdarg.h>
 
 /*----- global data -----*/
 
@@ -33,11 +34,14 @@ struct editorConfig {
     // stores file data
     int numRows;
     erow *row;
-
     char *filename; 
 
     int scrollYOffset; // vertical scroll offset
     int scrollXOffset; // horizontal scroll offset
+
+    // status msg
+    char statusmsg[80];
+    time_t statusmsg_time;
 };
 
 struct editorConfig Ed;
@@ -371,6 +375,7 @@ void editorProcessKey(){
 
 /* ----- row operations -----*/
 
+
 int editorCxToRx(erow *line, int cx){
     int rx = 0;
     for(int i=0;i<cx;i++){
@@ -432,6 +437,36 @@ void editorAppendLine(char *line, size_t len){
 
 /*----- output processing ----- */
 
+void editorSetStatusMessage(char *s, ...){ // variadic func.
+    /*
+        vsnprintf : its used to store data in buffer, but when input
+                    string have variable #args.
+    */
+
+    va_list args; // stores args list
+    va_start(args, s); // starts iterating over arg list starting from s
+
+    // internally it calls va_arg() to get current arg, and move
+    // iterator to next argument.
+    vsnprintf(Ed.statusmsg, sizeof(Ed.statusmsg), s, args);
+
+    va_end(args); // end of interation
+
+    Ed.statusmsg_time = time(NULL); // current time
+}
+
+void editorDrawStatusMessage(struct ab_buf *b){
+    ab_append(b, "\x1b[K", 3);
+    
+    int len = strlen(Ed.statusmsg);
+
+    if (len > Ed.screenCols) len = Ed.screenCols;
+    
+    if (len && time(NULL) - Ed.statusmsg_time < 5){
+        ab_append(b, Ed.statusmsg, len);
+    }
+}
+
 void editorDrawStatusBar(struct ab_buf *b){
     ab_append(b, "\x1b[7m", 4); // negative image (here white bg)
 
@@ -453,6 +488,8 @@ void editorDrawStatusBar(struct ab_buf *b){
         }
     }
     ab_append(b, "\x1b[m", 3);
+    ab_append(b, "\r\n", 2);
+
 }
 
 void editorDrawRows(struct ab_buf *b) {
@@ -547,6 +584,7 @@ void editorRefreshScreen(){
 
     editorDrawRows(&b);
     editorDrawStatusBar(&b);
+    editorDrawStatusMessage(&b);
 
     // to position the cursor according to our cursor pos variables.
     char buf[32];
@@ -602,12 +640,14 @@ void initEditor() {
     Ed.scrollXOffset = 0;
     Ed.scrollYOffset = 0;
     Ed.filename = "No Name";
+    Ed.statusmsg[0] = '\0';
+    Ed.statusmsg_time = 0;
 
 
     if (getWindowSize(&Ed.screenRows, &Ed.screenCols) == -1) {
         die("getWindowSize");
     }
-    Ed.screenRows -= 1;
+    Ed.screenRows -= 2;
 
 }
 
@@ -625,6 +665,7 @@ int main(int argc, char *argv[]){
         editorOpenFile(argv[1]);
     }
     
+    editorSetStatusMessage("HELP: Ctrl-Q ~ quit"); // 
     while (1){
         editorRefreshScreen();
         editorProcessKey();
