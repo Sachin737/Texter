@@ -11,6 +11,7 @@
 #include <sys/types.h>
 #include <time.h>
 #include <stdarg.h>
+#include <fcntl.h>
 
 /*----- global data -----*/
 
@@ -54,6 +55,7 @@ struct editorConfig Ed;
 #define TAB_SIZE 7
 
 enum editorKey {
+    BACKSPACE = 127,
     ARROW_LEFT = 100001,
     ARROW_RIGHT,
     ARROW_UP,
@@ -276,105 +278,7 @@ void ab_free(struct ab_buf *b) {
     free(b->buf);
 }
 
-/*----- input processing -----*/
-
-void editorMoveCursor(int key) {
-
-    // storing current row to avoid moving towards
-    // right of the content in line without pressing space.
-    erow *curRow = NULL;
-    if(Ed.cy < Ed.numRows){ //cursor on some file's line
-        curRow = &Ed.row[Ed.cy];
-    }
-
-    switch (key) {
-        case ARROW_UP:
-            if(Ed.cy > 0){
-                Ed.cy--;
-            }
-            break;
-
-        case ARROW_LEFT:
-            if(Ed.cx > 0){
-                Ed.cx--;
-            }else if(Ed.cy > 0){
-                Ed.cy--;
-                Ed.cx = Ed.row[Ed.cy].size;
-            }
-            break;
-
-        case ARROW_DOWN:
-            if(Ed.cy < Ed.numRows){ // to allow cursor to go till end of file instead just end of screen!
-                Ed.cy++;
-            }
-            break;
-            
-        case ARROW_RIGHT:
-            if(curRow){
-                if(Ed.cx < curRow->size){
-                    Ed.cx++;
-                }else if(Ed.cx == curRow->size){
-                    Ed.cy++;
-                    Ed.cx = 0;
-                }
-            }else{
-                // cant move right on empty line
-            }
-            break;
-    }
-
-    // But user can still move up or down with current x cords,
-    // and if that new row is shorter in length, its an issue!
-
-    if(Ed.cy < Ed.numRows){ //cursor on some file's line
-        curRow = &Ed.row[Ed.cy];
-    }else curRow = NULL;
-
-    if(curRow && Ed.cx > curRow->size)Ed.cx = curRow->size;
-}
-
-
-void editorProcessKey(){
-    int c = editorReadKey();
-
-    // Processing key presses
-    switch (c){
-        case CTRL_KEY('q'):
-            // to adjust cursor position and screen clear when program stops
-            write(STDOUT_FILENO, "\x1b[2J", 4);
-            write(STDOUT_FILENO, "\x1b[H", 3);    
-
-            exit(0);
-            break;
-        
-        case ARROW_UP:
-        case ARROW_DOWN:
-        case ARROW_LEFT:
-        case ARROW_RIGHT:
-            editorMoveCursor(c);
-            break;
-        
-        case PAGE_UP:
-        case PAGE_DOWN:
-            {
-                int total = Ed.screenRows;
-                while (total--)
-                    editorMoveCursor(c == PAGE_UP ? ARROW_UP : ARROW_DOWN);
-            }
-            break;
-        
-        case HOME_KEY:
-            Ed.cx = 0;
-            break;
-        case END_KEY:
-            if (Ed.cy < Ed.numRows)
-                Ed.cx = Ed.row[Ed.cy].size;
-            break;
-    }
-}
-
 /* ----- row operations -----*/
-
 
 int editorCxToRx(erow *line, int cx){
     int rx = 0;
@@ -433,6 +337,28 @@ void editorAppendLine(char *line, size_t len){
     Ed.row[id].renderData = NULL;
 
     editorUpdateRenderData(&Ed.row[id]);
+}
+
+void editorInsertCharToRow(erow *line, int idx, int c){
+    int curLen = line->size;
+    if(idx < 0 || idx > curLen) idx = curLen;
+
+    line->data = realloc(line->data, curLen + 2);
+    memmove(&line->data[idx+1], &line->data[idx], curLen-idx + 1);
+    
+    line->data[idx] = c;
+    line->size++;
+    editorUpdateRenderData(line); 
+}
+
+/* ----- editing operations ----- */
+
+void editorInsertChar(int c){
+    if(Ed.cy==Ed.numRows){ // appending new empty line
+        editorAppendLine("",0);
+    }
+    editorInsertCharToRow(&Ed.row[Ed.cy], Ed.cx, c);
+    Ed.cx++;
 }
 
 /*----- output processing ----- */
@@ -598,6 +524,7 @@ void editorRefreshScreen(){
     ab_free(&b);
 }
 
+
 /* ----- file-io ----- */
 
 void editorOpenFile(char *filename){
@@ -627,6 +554,161 @@ void editorOpenFile(char *filename){
 
     free(lineData);
     fclose(file_ptr);
+}
+
+char* editorFileDataToString(int *buflen){
+    int totLen = 0;
+    for(int i=0;i<Ed.numRows;i++){
+        totLen += Ed.row[i].size+1; // 1 for newline char
+    }
+    
+    *buflen = totLen;
+    char *buf = malloc(totLen);
+    char *ptr = buf;
+    for(int i=0;i<Ed.numRows;i++){ 
+        memcpy(ptr,Ed.row[i].data, Ed.row[i].size);
+        ptr += Ed.row[i].size;
+
+        *ptr = '\n';
+        ptr++;
+    }
+    return buf;
+}
+
+void editorSaveFile(){
+    if(Ed.filename==NULL)return;
+    
+    int len;
+    char* buf = editorFileDataToString(&len);
+
+    /*  O_CREAT: create new file if doesn;t exist.
+        0644: this give write permission to only owner.
+        O_RDWR: to read and write both 
+    */
+    int fd = open(Ed.filename, O_CREAT | O_RDWR, 0644);
+
+    ftruncate(fd, len);
+    write(fd, buf, len);
+    close(fd);
+    free(buf);
+}
+
+/*----- input processing -----*/
+
+void editorMoveCursor(int key) {
+
+    // storing current row to avoid moving towards
+    // right of the content in line without pressing space.
+    erow *curRow = NULL;
+    if(Ed.cy < Ed.numRows){ //cursor on some file's line
+        curRow = &Ed.row[Ed.cy];
+    }
+
+    switch (key) {
+        case ARROW_UP:
+            if(Ed.cy > 0){
+                Ed.cy--;
+            }
+            break;
+
+        case ARROW_LEFT:
+            if(Ed.cx > 0){
+                Ed.cx--;
+            }else if(Ed.cy > 0){
+                Ed.cy--;
+                Ed.cx = Ed.row[Ed.cy].size;
+            }
+            break;
+
+        case ARROW_DOWN:
+            if(Ed.cy < Ed.numRows){ // to allow cursor to go till end of file instead just end of screen!
+                Ed.cy++;
+            }
+            break;
+            
+        case ARROW_RIGHT:
+            if(curRow){
+                if(Ed.cx < curRow->size){
+                    Ed.cx++;
+                }else if(Ed.cx == curRow->size){
+                    Ed.cy++;
+                    Ed.cx = 0;
+                }
+            }else{
+                // cant move right on empty line
+            }
+            break;
+    }
+
+    // But user can still move up or down with current x cords,
+    // and if that new row is shorter in length, its an issue!
+
+    if(Ed.cy < Ed.numRows){ //cursor on some file's line
+        curRow = &Ed.row[Ed.cy];
+    }else curRow = NULL;
+
+    if(curRow && Ed.cx > curRow->size)Ed.cx = curRow->size;
+}
+
+void editorProcessKey(){
+    int c = editorReadKey();
+
+    // Processing key presses
+    switch (c){
+        case CTRL_KEY('s'):
+            editorSaveFile();
+            break;
+
+        case '\r': //enter key
+            // 
+            break;
+        
+        case BACKSPACE:
+        case CTRL_KEY('h'):
+        case DEL_KEY:
+            // 
+            break;
+        
+        case CTRL_KEY('l'): // to refresh screen
+        case '\x1b': //escape
+            // ignoring!
+            break;
+
+        case CTRL_KEY('q'):
+            // to adjust cursor position and screen clear when program stops
+            write(STDOUT_FILENO, "\x1b[2J", 4);
+            write(STDOUT_FILENO, "\x1b[H", 3);    
+
+            exit(0);
+            break;
+        
+        case ARROW_UP:
+        case ARROW_DOWN:
+        case ARROW_LEFT:
+        case ARROW_RIGHT:
+            editorMoveCursor(c);
+            break;
+        
+        case PAGE_UP:
+        case PAGE_DOWN:
+            {
+                int total = Ed.screenRows;
+                while (total--)
+                    editorMoveCursor(c == PAGE_UP ? ARROW_UP : ARROW_DOWN);
+            }
+            break;
+        
+        case HOME_KEY:
+            Ed.cx = 0;
+            break;
+        case END_KEY:
+            if (Ed.cy < Ed.numRows)
+                Ed.cx = Ed.row[Ed.cy].size;
+            break;
+        default:
+            editorInsertChar(c);
+            break;
+    }
 }
 
 /*----- main -----*/
