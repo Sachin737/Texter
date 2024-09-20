@@ -19,7 +19,6 @@ typedef struct erow
 {
     int size;
     char *data;
-
     int rSize;
     char *renderData;
 } erow;
@@ -43,6 +42,9 @@ struct editorConfig {
     // status msg
     char statusmsg[80];
     time_t statusmsg_time;
+
+    // to keep track of unsaved changes
+    int dirty;
 };
 
 struct editorConfig Ed;
@@ -53,6 +55,7 @@ struct editorConfig Ed;
 #define ab_BUF_INIT {NULL, 0}
 #define TEXTER_VERSION "0.0.1"
 #define TAB_SIZE 7
+#define TEXTER_QUIT_CONFIRM 3
 
 enum editorKey {
     BACKSPACE = 127,
@@ -337,6 +340,8 @@ void editorAppendLine(char *line, size_t len){
     Ed.row[id].renderData = NULL;
 
     editorUpdateRenderData(&Ed.row[id]);
+
+    Ed.dirty=1;
 }
 
 void editorInsertCharToRow(erow *line, int idx, int c){
@@ -349,6 +354,7 @@ void editorInsertCharToRow(erow *line, int idx, int c){
     line->data[idx] = c;
     line->size++;
     editorUpdateRenderData(line); 
+    Ed.dirty=1;
 }
 
 /* ----- editing operations ----- */
@@ -398,7 +404,7 @@ void editorDrawStatusBar(struct ab_buf *b){
 
     // printing file name
     char status[80], curStatus[80];
-    int len = snprintf(status, sizeof(status), "%.20s - %d lines", Ed.filename, Ed.numRows);
+    int len = snprintf(status, sizeof(status), "%.20s - %d lines %s", Ed.filename, Ed.numRows, Ed.dirty ? "(modified)" : "");
     int rlen = snprintf(curStatus, sizeof(curStatus), "%d/%d", Ed.cy+1, Ed.numRows);
      
 
@@ -554,6 +560,9 @@ void editorOpenFile(char *filename){
 
     free(lineData);
     fclose(file_ptr);
+    Ed.dirty=0; // because this fn calls editorAppend which 
+                // make file status as modified but its not when we
+                // newly open file.
 }
 
 char* editorFileDataToString(int *buflen){
@@ -587,11 +596,22 @@ void editorSaveFile(){
     */
     int fd = open(Ed.filename, O_CREAT | O_RDWR, 0644);
 
-    ftruncate(fd, len);
-    write(fd, buf, len);
-    close(fd);
+    if(fd!=-1){
+        if(ftruncate(fd, len)!=-1){
+            if(write(fd, buf, len)==len){
+                close(fd);
+                free(buf);
+                editorSetStatusMessage("%d bytes written to disk", len);
+                Ed.dirty = 0;
+
+                return;
+            }
+        }
+        close(fd);
+    }
     free(buf);
-}
+    editorSetStatusMessage("Can't save! I/O error: %s", strerror(errno));
+}   
 
 /*----- input processing -----*/
 
@@ -652,6 +672,7 @@ void editorMoveCursor(int key) {
 
 void editorProcessKey(){
     int c = editorReadKey();
+    static int quit_cntr = TEXTER_QUIT_CONFIRM;
 
     // Processing key presses
     switch (c){
@@ -675,6 +696,13 @@ void editorProcessKey(){
             break;
 
         case CTRL_KEY('q'):
+            if(Ed.dirty && quit_cntr){
+                editorSetStatusMessage("WARNING!!! File has unsaved changes."
+                "Press Ctrl-Q %d more times to quit.", quit_cntr);   
+                quit_cntr--;
+                return;
+            }
+
             // to adjust cursor position and screen clear when program stops
             write(STDOUT_FILENO, "\x1b[2J", 4);
             write(STDOUT_FILENO, "\x1b[H", 3);    
@@ -724,6 +752,7 @@ void initEditor() {
     Ed.filename = "No Name";
     Ed.statusmsg[0] = '\0';
     Ed.statusmsg_time = 0;
+    Ed.dirty = 0;
 
 
     if (getWindowSize(&Ed.screenRows, &Ed.screenCols) == -1) {
@@ -747,7 +776,8 @@ int main(int argc, char *argv[]){
         editorOpenFile(argv[1]);
     }
     
-    editorSetStatusMessage("HELP: Ctrl-Q ~ quit"); // 
+    editorSetStatusMessage("HELP: Ctrl-Q => quit | Ctrl-S => save");
+
     while (1){
         editorRefreshScreen();
         editorProcessKey();
