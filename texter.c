@@ -1,5 +1,5 @@
 /*----- includes -----*/
-
+ 	
 #include <unistd.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -324,22 +324,23 @@ void editorUpdateRenderData(erow *line){
     line->rSize = j;
 }
 
-void editorAppendLine(char *line, size_t len){
+void editorInsertRow(char *line, size_t len, int idx){
+    if(idx < 0 || idx>Ed.numRows) return;
+
     Ed.row = realloc(Ed.row, sizeof(erow) * (Ed.numRows + 1)); // allocating space for new line
+    memmove(&Ed.row[idx + 1], &Ed.row[idx], sizeof(erow)*(Ed.numRows-idx));
 
-    int id = Ed.numRows;
     Ed.numRows+=1;
-
-    Ed.row[id].size = len;    
+    Ed.row[idx].size = len;    
     
-    Ed.row[id].data = malloc(len + 1);
-    memcpy(Ed.row[id].data, line, len);
-    Ed.row[id].data[len]='\0';
+    Ed.row[idx].data = malloc(len + 1);
+    memcpy(Ed.row[idx].data, line, len);
+    Ed.row[idx].data[len]='\0';
 
-    Ed.row[id].rSize = 0;
-    Ed.row[id].renderData = NULL;
+    Ed.row[idx].rSize = 0;
+    Ed.row[idx].renderData = NULL;
 
-    editorUpdateRenderData(&Ed.row[id]);
+    editorUpdateRenderData(&Ed.row[idx]);
 
     Ed.dirty=1;
 }
@@ -357,14 +358,85 @@ void editorInsertCharToRow(erow *line, int idx, int c){
     Ed.dirty=1;
 }
 
+void editorAppendStringToRow(erow *row, char *s, size_t len) {
+    row->data = realloc(row->data, row->size + len + 1);
+
+    memcpy(&row->data[row->size], s, len);
+    
+    row->size += len;
+    row->data[row->size] = '\0';
+    editorUpdateRenderData(row);
+
+    Ed.dirty=1;
+}
+
+
+void editorDeleteCharFromRow(erow* line,int idx){
+    int curLen = line->size;
+    if(idx < 0 || idx > curLen) return;
+    memmove(&line->data[idx],&line->data[idx+1],line->size-idx);
+    line->size--;
+    Ed.dirty=1;
+
+    editorUpdateRenderData(line);
+}
+
+
+void editorDeleteRow(int idx){
+    if(idx < 0 || idx >= Ed.numRows) return;
+    
+    free(Ed.row[idx].renderData);
+    free(Ed.row[idx].data);
+
+    // shift all rows after row[idx] by one line.
+    memmove(&Ed.row[idx],&Ed.row[idx+1], sizeof(erow)*(Ed.numRows-idx-1));
+    
+    Ed.numRows--;
+    Ed.dirty=1;
+}
+
 /* ----- editing operations ----- */
 
 void editorInsertChar(int c){
     if(Ed.cy==Ed.numRows){ // appending new empty line
-        editorAppendLine("",0);
+        editorInsertRow("", 0, Ed.numRows);
     }
     editorInsertCharToRow(&Ed.row[Ed.cy], Ed.cx, c);
     Ed.cx++;
+}
+
+void editorDeleteChar(){
+    if(Ed.cy==Ed.numRows) return;
+    if(Ed.cx==0 && Ed.cy==0) return;
+
+    if(Ed.cx>0){ // erase char just before cursor
+        editorDeleteCharFromRow(&Ed.row[Ed.cy], Ed.cx - 1);
+        Ed.cx--;
+    }else{ // moving cursor to prev line's end and performing required action.
+        Ed.cx = Ed.row[Ed.cy - 1].size;
+        editorAppendStringToRow(&Ed.row[Ed.cy-1],Ed.row[Ed.cy].data,Ed.row[Ed.cy].size);
+        editorDeleteRow(Ed.cy);
+        Ed.cy--;
+    }
+}
+
+void editorInsertNewLine(){
+    if (Ed.cx == 0) { // pressing enter at line start
+        editorInsertRow("", 0, Ed.cy);
+    } else {
+        erow *row = &Ed.row[Ed.cy];
+
+        // split cur row and push right string to next row
+        editorInsertRow(&row->data[Ed.cx], row->size - Ed.cx, Ed.cy + 1);
+
+        row = &Ed.row[Ed.cy];
+        row->size = Ed.cx;
+        row->data[row->size] = '\0';
+        editorUpdateRenderData(row);
+    }
+
+    Ed.cy++;
+    Ed.cx = 0;
 }
 
 /*----- output processing ----- */
@@ -555,7 +627,7 @@ void editorOpenFile(char *filename){
         }
 
         // saving line to buffer
-        editorAppendLine(lineData,linelen);
+        editorInsertRow(lineData,linelen,Ed.numRows);
     }
 
     free(lineData);
@@ -681,13 +753,15 @@ void editorProcessKey(){
             break;
 
         case '\r': //enter key
-            // 
+            editorInsertNewLine();
             break;
         
         case BACKSPACE:
         case CTRL_KEY('h'):
         case DEL_KEY:
-            // 
+            // because del key delete current char at cursor pos.
+            if(c==DEL_KEY) editorMoveCursor(ARROW_RIGHT);
+            editorDeleteChar();
             break;
         
         case CTRL_KEY('l'): // to refresh screen
