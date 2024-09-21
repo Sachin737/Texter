@@ -1,4 +1,4 @@
-/*----- includes -----*/
+/* ----- includes ----- */
  	
 #include <unistd.h>
 #include <stdio.h>
@@ -16,7 +16,7 @@
 /* ----- prototypes ----- */
 char *editorPrompt(char* prompt,void (*callback)(char*,int));
 
-/*----- global data -----*/
+/* ----- global data ----- */
 
 typedef struct erow
 {
@@ -52,7 +52,7 @@ struct editorConfig {
 
 struct editorConfig Ed;
 
-/*----- defines -----*/
+/* ----- defines ----- */
 
 #define CTRL_KEY(k) ((k) & 0x1f) // Ctrl key actually do this only! 
 #define ab_BUF_INIT {NULL, 0}
@@ -74,7 +74,7 @@ enum editorKey {
 };
 
 
-/*----- terminal functions -----*/
+/* ----- terminal functions ----- */
 
 void die(const char* s){
     // to adjust cursor position and screen clear when program stops
@@ -263,7 +263,7 @@ int getWindowSize(int *rows, int *cols) {
     }
 }
 
-/*-----  append buffer  -----*/
+/* -----  append buffer  ----- */
 
 struct ab_buf {
     char *buf;
@@ -284,7 +284,7 @@ void ab_free(struct ab_buf *b) {
     free(b->buf);
 }
 
-/* ----- row operations -----*/
+/* ----- row operations ----- */
 
 int editorCxToRx(erow *line, int cx){
     int rx = 0;
@@ -456,7 +456,7 @@ void editorInsertNewLine(){
     Ed.cx = 0;
 }
 
-/*----- output processing ----- */
+/* ----- output processing ----- */
 
 void editorSetStatusMessage(char *s, ...){ // variadic func.
     /*
@@ -716,18 +716,37 @@ void editorSaveFile(){
 /* ----- search ----- */
 
 void editorFallBackSearch(char* query, int keyPress){
-
+    static int last_match_y = -1;
+    static int direction = 1; 
+    
     if(keyPress=='\r'||keyPress=='\x1b'){
+        last_match_y = -1;
+        direction = 1;
         return;
+    }else if(keyPress == ARROW_DOWN || keyPress == ARROW_RIGHT){
+        direction = 1;
+    }else if(keyPress == ARROW_UP || keyPress == ARROW_LEFT){
+        direction = -1;
+    }else{
+        last_match_y = -1;
+        direction = 1;
     }
 
+    int current_y = last_match_y;
+
     for(int i=0;i<Ed.numRows;i++){
-        erow* row = &Ed.row[i];
+        current_y+=direction;
+        if(current_y == -1) current_y = Ed.numRows - 1;
+        else if(current_y == Ed.numRows) current_y = 0;
+
+        erow* row = &Ed.row[current_y];
         char* ptr = strstr(row->renderData, query);
         // ptr to matched substr in row->renderData
 
         if(ptr){
-            Ed.cy = i;
+            last_match_y = current_y;
+
+            Ed.cy = current_y;
             Ed.cx = editorRxToCx(row,ptr - row->renderData);
             Ed.scrollYOffset=Ed.numRows; // to make screen scroll to matched line
             break;
@@ -736,16 +755,28 @@ void editorFallBackSearch(char* query, int keyPress){
 }
 
 void editorSearch(){
+    // saving cursor position to restore it after escaping search
+    int old_cx = Ed.cx;
+    int old_cy = Ed.cy;
+    int old_Xoffset = Ed.scrollXOffset;
+    int old_Yoffset = Ed.scrollYOffset;
+
+
     // this fallback func will be called again and again after keypress
     // [look at editorPrompt func to understand why!]
-    char* query = editorPrompt("Search: %s (Esc to cancel)", editorFallBackSearch);
+    char* query = editorPrompt("Search: %s (Esc : cancel | arrows : nextSearch | Enter : end search)", editorFallBackSearch);
     if (query) {
         free(query);
+    }else{  
+        Ed.cx = old_cx;
+        Ed.cy = old_cy;
+        Ed.scrollXOffset = old_Xoffset;
+        Ed.scrollYOffset = old_Yoffset;
     }
 }
 
 
-/*----- input processing -----*/
+/* ----- input processing ----- */
 
 void editorMoveCursor(int key) {
 
@@ -897,7 +928,8 @@ char *editorPrompt(char *prompt, void (*callback)(char*, int)) {
             editorSetStatusMessage("");
             if(callback) callback(buf, c);
             free(buf);
-            return NULL;
+
+            return NULL; // will cause curosr position to reset! 
         } else if (c == '\r') {
             if (buflen != 0) {
                 editorSetStatusMessage("");
@@ -917,7 +949,7 @@ char *editorPrompt(char *prompt, void (*callback)(char*, int)) {
 }
 
 
-/*----- main -----*/
+/* ----- main ----- */
 
 void initEditor() {
     Ed.rx = 0;
