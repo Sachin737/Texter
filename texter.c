@@ -14,7 +14,7 @@
 #include <fcntl.h>
 
 /* ----- prototypes ----- */
-char *editorPrompt(char* prompt);
+char *editorPrompt(char* prompt,void (*callback)(char*,int));
 
 /*----- global data -----*/
 
@@ -298,6 +298,20 @@ int editorCxToRx(erow *line, int cx){
     }
     return rx;
 }
+
+int editorRxToCx(erow *line, int rx){
+    int cur_rx = 0;
+    int i;
+    for(i=0;i<line->size;i++){
+        if(line->data[i]=='\t'){
+            cur_rx += TAB_SIZE - rx%(TAB_SIZE+1); 
+        }
+        cur_rx++;
+        if(cur_rx > rx) return i;
+    }
+    return i;
+}
+
 
 void editorUpdateRenderData(erow *line){
     free(line->renderData);
@@ -665,8 +679,9 @@ char* editorFileDataToString(int *buflen){
 */
 void editorSaveFile(){
     if(Ed.filename==NULL){
-        Ed.filename = editorPrompt("Save as: %s (ESC to cancel | Enter to save)");
+        Ed.filename = editorPrompt("Save as: %s (ESC to cancel | Enter to save)",NULL);
         if (Ed.filename == NULL) {
+            editorRefreshScreen();
             editorSetStatusMessage("Save aborted");
             return;
         }
@@ -697,6 +712,38 @@ void editorSaveFile(){
     free(buf);
     editorSetStatusMessage("Can't save! I/O error: %s", strerror(errno));
 }   
+
+/* ----- search ----- */
+
+void editorFallBackSearch(char* query, int keyPress){
+
+    if(keyPress=='\r'||keyPress=='\x1b'){
+        return;
+    }
+
+    for(int i=0;i<Ed.numRows;i++){
+        erow* row = &Ed.row[i];
+        char* ptr = strstr(row->renderData, query);
+        // ptr to matched substr in row->renderData
+
+        if(ptr){
+            Ed.cy = i;
+            Ed.cx = editorRxToCx(row,ptr - row->renderData);
+            Ed.scrollYOffset=Ed.numRows; // to make screen scroll to matched line
+            break;
+        }
+    }
+}
+
+void editorSearch(){
+    // this fallback func will be called again and again after keypress
+    // [look at editorPrompt func to understand why!]
+    char* query = editorPrompt("Search: %s (Esc to cancel)", editorFallBackSearch);
+    if (query) {
+        free(query);
+    }
+}
+
 
 /*----- input processing -----*/
 
@@ -761,6 +808,10 @@ void editorProcessKey(){
 
     // Processing key presses
     switch (c){
+        case CTRL_KEY('f'):
+            editorSearch();
+            break;
+            
         case CTRL_KEY('s'):
             editorSaveFile();
             break;
@@ -826,8 +877,7 @@ void editorProcessKey(){
     }
 }
 
-
-char *editorPrompt(char *prompt) {
+char *editorPrompt(char *prompt, void (*callback)(char*, int)) {
     size_t bufsize = 128;
     char *buf = malloc(bufsize);
     size_t buflen = 0;
@@ -845,11 +895,13 @@ char *editorPrompt(char *prompt) {
             }
         } else if (c == '\x1b') {
             editorSetStatusMessage("");
+            if(callback) callback(buf, c);
             free(buf);
             return NULL;
         } else if (c == '\r') {
             if (buflen != 0) {
                 editorSetStatusMessage("");
+                if(callback) callback(buf, c);
                 return buf;
             }
         }else if (!iscntrl(c) && c < 128) {
@@ -860,8 +912,10 @@ char *editorPrompt(char *prompt) {
             buf[buflen++] = c;
             buf[buflen] = '\0';
         }
+        if(callback) callback(buf, c);
     }
 }
+
 
 /*----- main -----*/
 
@@ -900,7 +954,7 @@ int main(int argc, char *argv[]){
         editorOpenFile(argv[1]);
     }
     
-    editorSetStatusMessage("HELP: Ctrl-Q => quit | Ctrl-S => save");
+    editorSetStatusMessage("HELP: Ctrl-S : save | Ctrl-Q : quit | Ctrl-F : find");
 
     while (1){
         editorRefreshScreen();
