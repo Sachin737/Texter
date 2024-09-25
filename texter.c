@@ -24,6 +24,8 @@ typedef struct erow
     char *data;
     int rSize;
     char *renderData;
+
+    int lineNo;
 } erow;
 
 
@@ -59,6 +61,7 @@ struct editorConfig Ed;
 #define TEXTER_VERSION "0.0.1"
 #define TAB_SIZE 7
 #define TEXTER_QUIT_CONFIRM 3
+#define LINENO_BAR_WIDTH 4
 
 enum editorKey {
     BACKSPACE = 127,
@@ -296,11 +299,11 @@ int editorCxToRx(erow *line, int cx){
         }
         rx++;
     }
-    return rx;
+    return rx+LINENO_BAR_WIDTH;
 }
 
 int editorRxToCx(erow *line, int rx){
-    int cur_rx = 0;
+    int cur_rx = LINENO_BAR_WIDTH;
     int i;
     for(i=0;i<line->size;i++){
         if(line->data[i]=='\t'){
@@ -344,8 +347,10 @@ void editorUpdateRenderData(erow *line){
 void editorInsertRow(char *line, size_t len, int idx){
     if(idx < 0 || idx>Ed.numRows) return;
 
+
     Ed.row = realloc(Ed.row, sizeof(erow) * (Ed.numRows + 1)); // allocating space for new line
     memmove(&Ed.row[idx + 1], &Ed.row[idx], sizeof(erow)*(Ed.numRows-idx));
+
 
     Ed.numRows+=1;
     Ed.row[idx].size = len;    
@@ -358,8 +363,10 @@ void editorInsertRow(char *line, size_t len, int idx){
     Ed.row[idx].renderData = NULL;
 
     editorUpdateRenderData(&Ed.row[idx]);
-
     Ed.dirty=1;
+
+    // updating line number 
+    for(int j=0;j<Ed.numRows;j++) Ed.row[j].lineNo=j+1;
 }
 
 void editorInsertCharToRow(erow *line, int idx, int c){
@@ -402,14 +409,19 @@ void editorDeleteCharFromRow(erow* line,int idx){
 void editorDeleteRow(int idx){
     if(idx < 0 || idx >= Ed.numRows) return;
     
-    free(Ed.row[idx].renderData);
     free(Ed.row[idx].data);
 
     // shift all rows after row[idx] by one line.
     memmove(&Ed.row[idx],&Ed.row[idx+1], sizeof(erow)*(Ed.numRows-idx-1));
     
+
     Ed.numRows--;
     Ed.dirty=1;
+
+    // updating line number 
+    for(int j=0;j<Ed.numRows;j++) Ed.row[j].lineNo=j+1;
+
+    editorUpdateRenderData(&Ed.row[idx]);
 }
 
 /* ----- editing operations ----- */
@@ -494,7 +506,7 @@ void editorDrawStatusBar(struct ab_buf *b){
     // printing file name
     char status[80], curStatus[80];
     int len = snprintf(status, sizeof(status), "%.20s - %d lines %s", Ed.filename, Ed.numRows, Ed.dirty ? "(modified)" : "");
-    int rlen = snprintf(curStatus, sizeof(curStatus), "%d/%d", Ed.cy+1, Ed.numRows);
+    int rlen = snprintf(curStatus, sizeof(curStatus), "%d/%d - Cx:%d Rx:%d Cy:%d totrors:%d", Ed.cy+1, Ed.numRows, Ed.cx, Ed.rx, Ed.cy, Ed.numRows);
      
 
     ab_append(b, status, len);
@@ -513,45 +525,90 @@ void editorDrawStatusBar(struct ab_buf *b){
 
 }
 
+void editorDrawLineNos(struct ab_buf *b, int id){
+    ab_append(b, "\x1b[1m",  4); // bold
+    ab_append(b, "\x1b[48;5;15m", 10); // bg
+    ab_append(b, "\x1b[38;5;16m", 10); // text
+    // ab_append(b, "\x1b[4m",  4); // underline
+
+    char s[20]; 
+    snprintf(s, sizeof(s), "%4d", Ed.row[id].lineNo); 
+    ab_append(b, s, 4); 
+    
+    ab_append(b, "\x1b[m", 3);
+
+}
+
 void editorDrawRows(struct ab_buf *b) {
-  int y;
-  for (y = 0; y < Ed.screenRows; y++) {
-    int realY = y + Ed.scrollYOffset;
+    int y;
 
-    if(realY >= Ed.numRows){
+    for (y = 0; y < Ed.screenRows; y++) {
+        int realY = y + Ed.scrollYOffset;
 
-        // we only show wlcm msg when user open empty editor
-        if (y == Ed.screenRows / 3 && Ed.numRows == 0) {
-            char welcome[80];
-            int welcomelen = snprintf(welcome, sizeof(welcome),
-                "TEXTER -- version %s", TEXTER_VERSION);
-            if (welcomelen > Ed.screenCols) welcomelen = Ed.screenCols;
+        if(realY >= Ed.numRows){
+            
+            // set colors for line no side bar.
+            ab_append(b, "\x1b[1m",  4); // bold
+            ab_append(b, "\x1b[48;5;15m", 10); // bg
+            ab_append(b, "\x1b[38;5;16m", 10); // text
 
-            int padding = (Ed.screenCols - welcomelen) / 2;
-            if (padding) {
-                ab_append(b, "~", 1);
-                padding--;
+            // we only show wlcm msg when user open empty editor
+            if (y == Ed.screenRows / 3 && Ed.numRows == 0) {
+
+                char welcome[80];
+                int welcomelen = snprintf(welcome, sizeof(welcome),
+                    "TEXTER -- version %s", TEXTER_VERSION);
+                if (welcomelen > Ed.screenCols) welcomelen = Ed.screenCols;
+
+                
+                int padding = (Ed.screenCols - welcomelen) / 2;
+                if (padding) {
+                    ab_append(b, "   ~", 4);
+                    padding--;
+                }
+
+                ab_append(b, "\x1b[m", 3); // reset color setting
+                while (padding--) ab_append(b, " ", 1);
+
+                
+                ab_append(b, welcome, welcomelen);
+            } else { // printing tildes
+                ab_append(b, "   ~", 4);
             }
-            while (padding--) ab_append(b, " ", 1);
 
+            ab_append(b, "\x1b[m", 3);
 
-            ab_append(b, welcome, welcomelen);
-        } else { // printing tildes
-            ab_append(b, "~", 1);
+            
+        }else{
+            editorDrawLineNos(b, realY);
+
+            // setting screen bg color
+            ab_append(b, "\x1b[48;5;17m", 10);
+
+            int len = Ed.row[realY].rSize - Ed.scrollXOffset;
+
+            // truncate data lines to screenCols
+            if(len < 0) len = 0;
+            if (len > Ed.screenCols) len = Ed.screenCols;
+
+            char *c = &Ed.row[realY].renderData[Ed.scrollXOffset];
+
+            // iterating char by char to detect digits
+            for(int i=0;i<len;i++){
+                if(isdigit(c[i])){  // coloring digits
+                    ab_append(b, "\x1b[36m", 5);
+                    ab_append(b, &c[i], 1);
+                    ab_append(b, "\x1b[39m", 5);
+                }else{
+                    ab_append(b, &c[i], 1);
+                }
+            }
         }
-    }else{
-        int len = Ed.row[realY].rSize - Ed.scrollXOffset;
 
-        // truncate data lines to screenCols
-        if(len < 0) len = 0;
-        if (len > Ed.screenCols) len = Ed.screenCols;
-
-        ab_append(b, &Ed.row[realY].renderData[Ed.scrollXOffset], len);
+        ab_append(b, "\x1b[K", 3);
+        ab_append(b, "\r\n", 2);
     }
 
-    ab_append(b, "\x1b[K", 3);
-    ab_append(b, "\r\n", 2);
-  }
 }
 
 void editorScroll() {
@@ -570,8 +627,9 @@ void editorScroll() {
         Ed.scrollYOffset = Ed.cy - Ed.screenRows + 1;
     }
 
+
     if (Ed.rx < Ed.scrollXOffset) {
-        Ed.scrollXOffset = Ed.rx;
+        Ed.scrollXOffset = Ed.rx-LINENO_BAR_WIDTH;
     }
 
     // same thing for scroll down, [to view content below when scrolling down]
@@ -589,6 +647,7 @@ void editorScroll() {
 */
 
 void editorRefreshScreen(){
+
     editorScroll();
 
     /* 
@@ -597,12 +656,15 @@ void editorRefreshScreen(){
     */
 
     struct ab_buf b = ab_BUF_INIT;
+    
     ab_append(&b, "\x1b[?25l", 6); // disable pointer
 
     // this will adjust the cursor position to top-left
     // read here about '[H': https://vt100.net/docs/vt100-ug/chapter3.html#CUP
     ab_append(&b, "\x1b[H", 3);
 
+
+    // draw
     editorDrawRows(&b);
     editorDrawStatusBar(&b);
     editorDrawStatusMessage(&b);
@@ -613,8 +675,9 @@ void editorRefreshScreen(){
     ab_append(&b, buf, strlen(buf));
 
     ab_append(&b, "\x1b[?25h", 6); // enable pointer
-
+    
     write(STDOUT_FILENO, b.buf, b.len); //finally writing buffer to stdout
+    
     
     ab_free(&b);
 }
@@ -636,6 +699,7 @@ void editorOpenFile(char *filename){
     size_t linecap = 0; //stores current length of data stored in lineData.
 
     // linelen = ;
+    
 
     while((linelen = getline(&lineData, &linecap, file_ptr)) != -1){
         // strip off the newline or carriage return at the end
@@ -952,6 +1016,7 @@ char *editorPrompt(char *prompt, void (*callback)(char*, int)) {
 /* ----- main ----- */
 
 void initEditor() {
+
     Ed.rx = 0;
     Ed.cx = 0;
     Ed.cy = 0;
@@ -963,12 +1028,13 @@ void initEditor() {
     Ed.statusmsg[0] = '\0';
     Ed.statusmsg_time = 0;
     Ed.dirty = 0;
-
+    
 
     if (getWindowSize(&Ed.screenRows, &Ed.screenCols) == -1) {
         die("getWindowSize");
     }
     Ed.screenRows -= 2;
+    Ed.screenCols -= LINENO_BAR_WIDTH;
 
 }
 
@@ -981,7 +1047,7 @@ int main(int argc, char *argv[]){
     */
     enableRawMode();
     initEditor();
-
+    
     if(argc >=2){
         editorOpenFile(argv[1]);
     }
