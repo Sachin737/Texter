@@ -1,5 +1,5 @@
 /* ----- includes ----- */
- 	
+				
 #include <unistd.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -12,6 +12,7 @@
 #include <time.h>
 #include <stdarg.h>
 #include <fcntl.h>
+#include <ncurses.h>
 
 /* ----- prototypes ----- */
 char *editorPrompt(char* prompt,void (*callback)(char*,int));
@@ -156,15 +157,13 @@ int editorReadKey(){
     /*
         reading escape seq: '\x1b[?'
         this type of escape seq is send to our program 
-        when we press arrow keys. so we are just mapping
-        it to w,s,a,d
+        when we press function/control keys.
     */
 
    /*
         The Home key could be sent as <esc>[1~, <esc>[7~, <esc>[H, or <esc>OH. 
         Similarly, the End key could be sent as <esc>[4~, <esc>[8~, <esc>[F, or <esc>OF.
    */
-
     if(c == '\x1b'){
         char s[3];
 
@@ -205,11 +204,35 @@ int editorReadKey(){
             }
         }
         return '\x1b';
-    }else{
-        return c;
-
     }
 
+
+    // Handle mouse events
+    if (c == '\x1b' && read(STDIN_FILENO, &c, 1) == 1 && c == '[') {
+        char button_info[3];
+        if (read(STDIN_FILENO, &button_info[0], 3) == 3) {
+            int button = button_info[0] - 32; // Button number
+            int y = button_info[1] - ' ';      // Y coordinate
+            int x = button_info[2] - ' ';      // X coordinate
+
+            // Process button click here (you can add more logic based on button pressed)
+            switch(button) {
+                case 0: // Left button clicked
+                    mvprintw(y, x, "Left mouse button clicked at (%d, %d)", x, y);
+                    break;
+                case 1: // Middle button clicked
+                    mvprintw(y, x, "Middle mouse button clicked at (%d, %d)", x, y);
+                    break;
+                case 2: // Right button clicked
+                    mvprintw(y, x, "Right mouse button clicked at (%d, %d)", x, y);
+                    break;
+            }
+            refresh(); 
+            return 10; 
+        }
+    }
+
+    return c;
 }
 
 int getCursorPosition(int *rows, int *cols){
@@ -506,7 +529,7 @@ void editorDrawStatusBar(struct ab_buf *b){
     // printing file name
     char status[80], curStatus[80];
     int len = snprintf(status, sizeof(status), "%.20s - %d lines %s", Ed.filename, Ed.numRows, Ed.dirty ? "(modified)" : "");
-    int rlen = snprintf(curStatus, sizeof(curStatus), "%d/%d - Cx:%d Rx:%d Cy:%d totrors:%d", Ed.cy+1, Ed.numRows, Ed.cx, Ed.rx, Ed.cy, Ed.numRows);
+    int rlen = snprintf(curStatus, sizeof(curStatus), "%d/%d - Cx:%d Rx:%d Xoff:%d", Ed.cy+1, Ed.numRows, Ed.cx, Ed.rx, Ed.scrollXOffset);
      
 
     ab_append(b, status, len);
@@ -628,13 +651,13 @@ void editorScroll() {
     }
 
 
-    if (Ed.rx < Ed.scrollXOffset) {
+    if (Ed.rx < Ed.scrollXOffset + LINENO_BAR_WIDTH) {
         Ed.scrollXOffset = Ed.rx-LINENO_BAR_WIDTH;
     }
 
     // same thing for scroll down, [to view content below when scrolling down]
-    if (Ed.rx >= Ed.scrollXOffset + Ed.screenCols) {
-        Ed.scrollXOffset = Ed.rx - Ed.screenCols + 1;
+    if (Ed.rx >= Ed.scrollXOffset + Ed.screenCols + LINENO_BAR_WIDTH) {
+        Ed.scrollXOffset = Ed.rx - Ed.screenCols + 1 - + LINENO_BAR_WIDTH;
     }
 }
 
@@ -647,7 +670,6 @@ void editorScroll() {
 */
 
 void editorRefreshScreen(){
-
     editorScroll();
 
     /* 
@@ -901,7 +923,7 @@ void editorProcessKey(){
     int c = editorReadKey();
     static int quit_cntr = TEXTER_QUIT_CONFIRM;
 
-    // Processing key presses
+    // Processing keyboard button
     switch (c){
         case CTRL_KEY('f'):
             editorSearch();
@@ -1029,6 +1051,11 @@ void initEditor() {
     Ed.statusmsg_time = 0;
     Ed.dirty = 0;
     
+    // to detect mouse ptr 
+    initscr();
+    curs_set(0);
+    mousemask(ALL_MOUSE_EVENTS, NULL);
+
 
     if (getWindowSize(&Ed.screenRows, &Ed.screenCols) == -1) {
         die("getWindowSize");
