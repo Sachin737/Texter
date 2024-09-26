@@ -28,7 +28,7 @@ typedef struct erow
 
     int lineNo;
 } erow;
-
+ 
 
 struct editorConfig {
     struct termios orig_termios; // terminal attributes (basically terminal settings' attr)can be read in termios struct
@@ -53,8 +53,12 @@ struct editorConfig {
     int dirty;
 
     // to keep track of selected text
-    int copied;
+    int selected;
     int sx,sy,ex,ey; // cords of selection
+    char* selectedData;
+    int selectedDataLen;
+    
+    int copied;
     char* copiedData;
     int copiedDataLen;
 };
@@ -947,81 +951,72 @@ void editorMoveCursor(int key) {
 }
 
 void editorUpdateSelectionEndPoints() {
-    if (Ed.copied) {
+    /*
+        Main idea:
+        I keep Ed.sx,Ed.sy always as the point from where
+        we started selecting text (with SHIFT+X).
+
+        then from Ed.ex,Ed.ey, even if any one is less that start 
+        cords, I take care of it while memmove data from 
+        row data to -> selectedData buffer.
+        how? by taking min of both wherever necessary!!
+    */
+
+    if (Ed.selected) {
         Ed.ex = Ed.cx;
-        Ed.ey = Ed.cy;
+        Ed.ey = Ed.cy; 
 
         int len = 0;
         if (Ed.sy == Ed.ey) { // copying within single line
-            if (Ed.sx > Ed.ex) { // swap
-                int tmp = Ed.sx;
-                Ed.sx = Ed.ex;
-                Ed.ex = tmp;
-            }
 
-            len = Ed.ex - Ed.sx + 1;
-            Ed.copiedDataLen = len;
+            len = (Ed.ex>Ed.sx ? Ed.ex - Ed.sx: Ed.sx - Ed.ex) + 1;
+            Ed.selectedDataLen = len;
 
-            Ed.copiedData = malloc(len+1);
-            memmove(Ed.copiedData, &Ed.row[Ed.sy].data[Ed.sx], len);
-            Ed.copiedData[len++] = '\0';
+            Ed.selectedData = malloc(len+1);
+            memmove(Ed.selectedData, &Ed.row[Ed.sy].data[(Ed.ex<Ed.sx?Ed.ex:Ed.sx)], len);
+            Ed.selectedData[len++] = '\0';
 
         } else { // copying multiple lines
-            if (Ed.sy > Ed.ey) { // swap
-                int tmp = Ed.sy;
-                Ed.sy = Ed.ey;
-                Ed.ey = tmp;
-
-                tmp = Ed.sx;
-                Ed.sx = Ed.ex;
-                Ed.ex = tmp;
-            }
-
-        /*
-            First line:-
-            if there are multiple lines then 
-            only add '\n'
-            how is it possible that only single line in this ifcase?
-            user may first select mutiple lines
-            then move up to single line (selected) only!!
-        */
-        
             int len;
 
-            if(Ed.ey > Ed.sy){
-                len = Ed.row[Ed.sy].size - Ed.sx;
-                Ed.copiedData = malloc(len+1);
+            if(Ed.ey != Ed.sy){
+                len = Ed.row[(Ed.ey<Ed.sy?Ed.ey:Ed.sy)].size - (Ed.ey<Ed.sy?Ed.ex:Ed.sx);
+                Ed.selectedData = malloc(len+1);
                 
-                memmove(Ed.copiedData, &Ed.row[Ed.sy].data[Ed.sx], len);
-                Ed.copiedData[len++] = '\n';
-            }else{
-                len = Ed.ex - Ed.sx + 1;
-                Ed.copiedData = malloc(len+1);
+                memmove(Ed.selectedData, &Ed.row[(Ed.ey<Ed.sy?Ed.ey:Ed.sy)].data[(Ed.ey<Ed.sy?Ed.ex:Ed.sx)], len);
+                Ed.selectedData[len++] = '\n';
 
-                memmove(Ed.copiedData, &Ed.row[Ed.sy].data[Ed.sx], len);                
-                Ed.copiedData[len++] = '\0';
+            }else{
+                len = (Ed.ex>Ed.sx ? Ed.ex - Ed.sx: Ed.sx - Ed.ex) + 1;
+                Ed.selectedData = malloc(len+1);
+
+                memmove(Ed.selectedData, &Ed.row[Ed.sy].data[(Ed.ex<Ed.sx?Ed.ex:Ed.sx)], len);                
+                Ed.selectedData[len++] = '\0';
+                    
             }
 
             // In between
-            for (int i = Ed.sy + 1; i < Ed.ey; i++) {
+            for (int i = (Ed.ey<Ed.sy?Ed.ey:Ed.sy) + 1; i < (Ed.ey<Ed.sy?Ed.sy:Ed.ey); i++) {
                 int prevLen = len;
                 len += Ed.row[i].size;
                 
-                Ed.copiedData = realloc(Ed.copiedData, len+1);
-                memmove(Ed.copiedData + prevLen, Ed.row[i].data, Ed.row[i].size);
+                Ed.selectedData = realloc(Ed.selectedData, len+1);
+                memmove(Ed.selectedData + prevLen, Ed.row[i].data, Ed.row[i].size);
                 
-                Ed.copiedData[len++] = '\n';
+                Ed.selectedData[len++] = '\n';
+
                 
             }
 
             // Last line
             if(Ed.ey != Ed.sy){
-                len += (Ed.ex + 1);
-                Ed.copiedData = realloc(Ed.copiedData, len+1);
-                memmove(Ed.copiedData + (len - (Ed.ex + 1)), Ed.row[Ed.ey].data, Ed.ex + 1);
+                len += ((Ed.ey<Ed.sy?Ed.sx:Ed.ex) + 1);
+                Ed.selectedData = realloc(Ed.selectedData, len+1);
+                memmove(Ed.selectedData + len - ((Ed.ey<Ed.sy?Ed.sx:Ed.ex) + 1), Ed.row[(Ed.ey<Ed.sy?Ed.sy:Ed.ey)].data, (Ed.ey<Ed.sy?Ed.sx:Ed.ex) + 1);
             
-                Ed.copiedData[len++] = '\0';
-                Ed.copiedDataLen = len;
+                Ed.selectedData[len++] = '\0';
+                Ed.selectedDataLen = len;
+
             }
         }
     }
@@ -1033,18 +1028,13 @@ void editorProcessKey(){
     static int quit_cntr = TEXTER_QUIT_CONFIRM;
     
     // handle selected data ends
-    if(!Ed.copied && (c==SHIFT_ARROW_DOWN||c==SHIFT_ARROW_UP||c==SHIFT_ARROW_LEFT||c==SHIFT_ARROW_RIGHT)){
-        // we continue with shift+x 
-        Ed.copied=1;
+    if(!Ed.selected && (c==SHIFT_ARROW_DOWN||c==SHIFT_ARROW_UP||c==SHIFT_ARROW_LEFT||c==SHIFT_ARROW_RIGHT)){
+        // we started shift+x operation 
+        Ed.selected=1;
         Ed.sx = Ed.cx;
         Ed.sy = Ed.cy;
-    }else if(Ed.copied && c!=SHIFT_ARROW_DOWN &&  c!=SHIFT_ARROW_UP &&  c!=SHIFT_ARROW_LEFT &&  c!=SHIFT_ARROW_RIGHT){
-        // debugLog("Copied Data:\r\n%s \r\nLength: %d", Ed.copiedData, Ed.copiedDataLen);
-
-        // wew left shift+x selection process
-        Ed.copied = 0;
-        Ed.copiedData = NULL;
-        Ed.copiedDataLen = 0;
+        Ed.ex = Ed.cx;
+        Ed.ey = Ed.cy;
     }
 
     // Processing keyboard button
@@ -1075,6 +1065,9 @@ void editorProcessKey(){
             break;
 
         case CTRL_KEY('q'):
+
+            debugLog("selected Data:\r\n%s", Ed.copiedData);
+
             if(Ed.dirty && quit_cntr){
                 editorSetStatusMessage("WARNING!!! File has unsaved changes."
                 "Press Ctrl-Q %d more times to quit.", quit_cntr);   
@@ -1113,6 +1106,15 @@ void editorProcessKey(){
                 Ed.cx = Ed.row[Ed.cy].size;
             break;
         
+        case CTRL_KEY('c'):
+            if(Ed.selected){ // selected text copied with ctrl+c
+                Ed.copied = 1;
+            }else{
+                // selected Data is NULL
+                Ed.copied = 0;
+            }
+            break;
+
         case SHIFT_ARROW_UP:
         case SHIFT_ARROW_DOWN:
         case SHIFT_ARROW_RIGHT:
@@ -1124,6 +1126,23 @@ void editorProcessKey(){
         default:
             editorInsertChar(c);
             break;
+    }
+
+    // handle select data
+    if(Ed.selected && c!=SHIFT_ARROW_DOWN &&  c!=SHIFT_ARROW_UP &&  c!=SHIFT_ARROW_LEFT &&  c!=SHIFT_ARROW_RIGHT){
+        // we left shift+x selection process
+        
+        if(Ed.copied){ // if copied, store it
+        
+            Ed.copiedData = malloc(Ed.selectedDataLen+1);
+            memmove(Ed.copiedData, Ed.selectedData, Ed.selectedDataLen);
+            Ed.copiedDataLen = Ed.selectedDataLen;
+            Ed.copiedData[Ed.copiedDataLen++]='\0';
+        }
+
+        Ed.selected = 0;
+        Ed.selectedData = NULL;
+        Ed.selectedDataLen = 0;
     }
 }
 
@@ -1177,8 +1196,11 @@ void initEditor() {
     Ed.sy = 0;
     Ed.ex = 0;
     Ed.ey = 0;
-    Ed.copiedData = NULL;
+    Ed.selected = 0;
+    Ed.selectedData = NULL;
+    Ed.selectedDataLen = 0;
     Ed.copied = 0;
+    Ed.copiedData = NULL;
     Ed.copiedDataLen = 0;
 
     Ed.rx = 0;
