@@ -88,6 +88,23 @@ enum editorKey {
     SHIFT_ARROW_LEFT,
 };
 
+/* ----- DEBUG functions ----- */
+
+void debugLog(const char *format, ...) {
+    FILE *logFile = fopen("debug_log.txt", "a"); // Append mode to keep previous logs
+    if (logFile == NULL) {
+        return; // If the file can't be opened, exit the function
+    }
+
+    va_list args;
+    va_start(args, format);
+    vfprintf(logFile, format, args);
+    va_end(args);
+
+    fprintf(logFile, "\n"); // Add a new line after each log
+    fclose(logFile);
+}
+
 
 /* ----- terminal functions ----- */
 
@@ -535,7 +552,7 @@ void editorDrawStatusBar(struct ab_buf *b){
     // printing file name
     char status[80], curStatus[80];
     int len = snprintf(status, sizeof(status), "%.20s - %d lines %s", Ed.filename, Ed.numRows, Ed.dirty ? "(modified)" : "");
-    int rlen = snprintf(curStatus, sizeof(curStatus), "%d/%d - Cx:%d Rx:%d [sx:%d,ex:%d]", Ed.cy+1, Ed.numRows, Ed.cx, Ed.rx, Ed.sx, Ed.ex);
+    int rlen = snprintf(curStatus, sizeof(curStatus), "%d/%d - Cx:%d Rx:%d [sy:%d,sx:%d]->[ey:%d,ex:%d]", Ed.cy+1, Ed.numRows,Ed.cx, Ed.rx,  Ed.sy+1, Ed.sx+1, Ed.ey+1, Ed.ex+1);
      
 
     ab_append(b, status, len);
@@ -869,12 +886,6 @@ void editorSearch(){
 /* ----- input processing ----- */
 
 void editorMoveCursor(int key) {
-    // handle selected data ends
-    if(!Ed.copied && (key==SHIFT_ARROW_DOWN||key==SHIFT_ARROW_UP||key==SHIFT_ARROW_LEFT||key==SHIFT_ARROW_RIGHT)){
-        Ed.copied=1;
-        Ed.sx = Ed.cx;
-        Ed.sy = Ed.cy;
-    }
 
     // storing current row to avoid moving towards
     // right of the content in line without pressing space.
@@ -935,15 +946,14 @@ void editorMoveCursor(int key) {
 
 }
 
-void editorUpdateSelectionEndPoints(){
-    
-    if(Ed.copied){
+void editorUpdateSelectionEndPoints() {
+    if (Ed.copied) {
         Ed.ex = Ed.cx;
         Ed.ey = Ed.cy;
 
         int len = 0;
-        if(Ed.sy==Ed.ey){
-            if(Ed.sx > Ed.ex){ // swap
+        if (Ed.sy == Ed.ey) { // copying within single line
+            if (Ed.sx > Ed.ex) { // swap
                 int tmp = Ed.sx;
                 Ed.sx = Ed.ex;
                 Ed.ex = tmp;
@@ -953,12 +963,11 @@ void editorUpdateSelectionEndPoints(){
             Ed.copiedDataLen = len;
 
             Ed.copiedData = malloc(len+1);
-            memmove(&Ed.copiedData, &Ed.row[Ed.sy].data[Ed.sx], len);
-            
-            // editorSetStatusMessage("%s", &Ed.copiedData, Ed.copiedDataLen);
-            
-        }else{
-            if(Ed.sy > Ed.ey){ // swap
+            memmove(Ed.copiedData, &Ed.row[Ed.sy].data[Ed.sx], len);
+            Ed.copiedData[len++] = '\0';
+
+        } else { // copying multiple lines
+            if (Ed.sy > Ed.ey) { // swap
                 int tmp = Ed.sy;
                 Ed.sy = Ed.ey;
                 Ed.ey = tmp;
@@ -968,24 +977,75 @@ void editorUpdateSelectionEndPoints(){
                 Ed.ex = tmp;
             }
 
-            len = (Ed.row[Ed.sx].size-Ed.sx)+Ed.ex  + 1;
-            Ed.copiedDataLen = len;
+        /*
+            First line:-
+            if there are multiple lines then 
+            only add '\n'
+            how is it possible that only single line in this ifcase?
+            user may first select mutiple lines
+            then move up to single line (selected) only!!
+        */
+        
+            int len;
 
-            Ed.copiedData = malloc(len+1);
-            memmove(&Ed.copiedData, &Ed.row[Ed.sy].data[Ed.sx], len);
-            
-            // editorSetStatusMessage("%s", &Ed.copiedData, Ed.copiedDataLen);
+            if(Ed.ey > Ed.sy){
+                len = Ed.row[Ed.sy].size - Ed.sx;
+                Ed.copiedData = malloc(len+1);
+                
+                memmove(Ed.copiedData, &Ed.row[Ed.sy].data[Ed.sx], len);
+                Ed.copiedData[len++] = '\n';
+            }else{
+                len = Ed.ex - Ed.sx + 1;
+                Ed.copiedData = malloc(len+1);
 
+                memmove(Ed.copiedData, &Ed.row[Ed.sy].data[Ed.sx], len);                
+                Ed.copiedData[len++] = '\0';
+            }
+
+            // In between
+            for (int i = Ed.sy + 1; i < Ed.ey; i++) {
+                int prevLen = len;
+                len += Ed.row[i].size;
+                
+                Ed.copiedData = realloc(Ed.copiedData, len+1);
+                memmove(Ed.copiedData + prevLen, Ed.row[i].data, Ed.row[i].size);
+                
+                Ed.copiedData[len++] = '\n';
+                
+            }
+
+            // Last line
+            if(Ed.ey != Ed.sy){
+                len += (Ed.ex + 1);
+                Ed.copiedData = realloc(Ed.copiedData, len+1);
+                memmove(Ed.copiedData + (len - (Ed.ex + 1)), Ed.row[Ed.ey].data, Ed.ex + 1);
             
+                Ed.copiedData[len++] = '\0';
+                Ed.copiedDataLen = len;
+            }
         }
-    }else{
-
     }
 }
+
 
 void editorProcessKey(){
     int c = editorReadKey();
     static int quit_cntr = TEXTER_QUIT_CONFIRM;
+    
+    // handle selected data ends
+    if(!Ed.copied && (c==SHIFT_ARROW_DOWN||c==SHIFT_ARROW_UP||c==SHIFT_ARROW_LEFT||c==SHIFT_ARROW_RIGHT)){
+        // we continue with shift+x 
+        Ed.copied=1;
+        Ed.sx = Ed.cx;
+        Ed.sy = Ed.cy;
+    }else if(Ed.copied && c!=SHIFT_ARROW_DOWN &&  c!=SHIFT_ARROW_UP &&  c!=SHIFT_ARROW_LEFT &&  c!=SHIFT_ARROW_RIGHT){
+        // debugLog("Copied Data:\r\n%s \r\nLength: %d", Ed.copiedData, Ed.copiedDataLen);
+
+        // wew left shift+x selection process
+        Ed.copied = 0;
+        Ed.copiedData = NULL;
+        Ed.copiedDataLen = 0;
+    }
 
     // Processing keyboard button
     switch (c){
@@ -1052,25 +1112,13 @@ void editorProcessKey(){
             if (Ed.cy < Ed.numRows)
                 Ed.cx = Ed.row[Ed.cy].size;
             break;
-
+        
         case SHIFT_ARROW_UP:
-            editorMoveCursor(c);
-            editorUpdateSelectionEndPoints();
-            break;
         case SHIFT_ARROW_DOWN:
-            editorMoveCursor(c);
-            editorUpdateSelectionEndPoints();
-        
-            break;
         case SHIFT_ARROW_RIGHT:
-            editorMoveCursor(c);
-            editorUpdateSelectionEndPoints();
-        
-            break;
         case SHIFT_ARROW_LEFT:
             editorMoveCursor(c);
             editorUpdateSelectionEndPoints();
-        
             break;
 
         default:
