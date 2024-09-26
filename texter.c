@@ -1,5 +1,5 @@
 /* ----- includes ----- */
-				
+
 #include <unistd.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -12,10 +12,10 @@
 #include <time.h>
 #include <stdarg.h>
 #include <fcntl.h>
-#include <ncurses.h>
 
 /* ----- prototypes ----- */
 char *editorPrompt(char* prompt,void (*callback)(char*,int));
+void editorSetStatusMessage(char *s, ...);
 
 /* ----- global data ----- */
 
@@ -51,22 +51,29 @@ struct editorConfig {
 
     // to keep track of unsaved changes
     int dirty;
+
+    // to keep track of selected text
+    int copied;
+    int sx,sy,ex,ey; // cords of selection
+    char* copiedData;
+    int copiedDataLen;
 };
 
 struct editorConfig Ed;
 
 /* ----- defines ----- */
 
-#define CTRL_KEY(k) ((k) & 0x1f) // Ctrl key actually do this only! 
+#define CTRL_KEY(k) ((k) & 0x1f)  // 11111
 #define ab_BUF_INIT {NULL, 0}
 #define TEXTER_VERSION "0.0.1"
 #define TAB_SIZE 7
-#define TEXTER_QUIT_CONFIRM 3
+#define TEXTER_QUIT_CONFIRM 2
 #define LINENO_BAR_WIDTH 4
+#define STATUS_DISPLAY_TIME 1
 
 enum editorKey {
     BACKSPACE = 127,
-    ARROW_LEFT = 100001,
+    ARROW_LEFT = 10001,
     ARROW_RIGHT,
     ARROW_UP,
     ARROW_DOWN,
@@ -75,6 +82,10 @@ enum editorKey {
     HOME_KEY,
     END_KEY,
     DEL_KEY,
+    SHIFT_ARROW_UP,
+    SHIFT_ARROW_DOWN,
+    SHIFT_ARROW_RIGHT,
+    SHIFT_ARROW_LEFT,
 };
 
 
@@ -145,50 +156,69 @@ void enableRawMode() {
     } 
 }
 
-int editorReadKey(){
+int editorReadKey() {
     int readn;
     char c;
-    while((readn = read(STDERR_FILENO, &c, 1)) != 1){
-        if (readn == -1 && errno != EAGAIN){
+
+    // Read a character from stdin
+    while ((readn = read(STDIN_FILENO, &c, 1)) != 1) {
+        if (readn == -1 && errno != EAGAIN) {
             die("read");
         }
     }
 
-    /*
-        reading escape seq: '\x1b[?'
-        this type of escape seq is send to our program 
-        when we press function/control keys.
-    */
+    // Handle escape sequences
+    if (c == '\x1b') {
+        char seq[3];
 
-   /*
-        The Home key could be sent as <esc>[1~, <esc>[7~, <esc>[H, or <esc>OH. 
-        Similarly, the End key could be sent as <esc>[4~, <esc>[8~, <esc>[F, or <esc>OF.
-   */
-    if(c == '\x1b'){
-        char s[3];
+        // Try reading the next two characters to detect escape sequences
+        if (read(STDIN_FILENO, &seq[0], 1) != 1) return '\x1b';
+        if (read(STDIN_FILENO, &seq[1], 1) != 1) return '\x1b';
 
-        // if we have input size < 3: return '\x1b'
-        if (read(STDIN_FILENO, &s[0], 1) != 1) return '\x1b';
-        if (read(STDIN_FILENO, &s[1], 1) != 1) return '\x1b';
+        // Handling escape sequences for special keys
 
-        // handling escape seq press!
-        if (s[0] == '[') {
+        if (seq[0] == '[') {
+    
+            if (seq[1] >= '0' && seq[1] <= '9') {
+                // Read the next part of the escape sequence
+                char seq2[3];
+                if (read(STDIN_FILENO, &seq2[0], 1) != 1) return '\x1b';
+                    
+                
+                // Check if it's a Shift+Arrow key
+                if (seq2[0] == ';') {
+                    if (read(STDIN_FILENO, &seq2[1], 1) != 1) return '\x1b';
+                
 
-            if(s[1]>='0' && s[1]<='9'){ // handling pageUp/Down button
-                if (read(STDIN_FILENO, &s[2], 1) != 1) return '\x1b';
-                    if (s[2] == '~') {
-                        switch (s[1]) {
-                            case '1': return HOME_KEY;
-                            case '4': return END_KEY;
-                            case '3': return DEL_KEY;
-                            case '5': return PAGE_UP;
-                            case '6': return PAGE_DOWN;
-                            case '7': return HOME_KEY;
-                            case '8': return END_KEY;
+                    if (seq2[1] == '2') {  // "2" indicates Shift key
+                        if (read(STDIN_FILENO, &seq2[2], 1) != 1) return '\x1b';
+
+                            
+                        // editorSetStatusMessage("%3s",seq2);
+
+                        // Map SHIFT+Arrow keys
+                        switch (seq2[2]) {
+                            case 'A': return SHIFT_ARROW_UP;
+                            case 'B': return SHIFT_ARROW_DOWN;
+                            case 'C': return SHIFT_ARROW_RIGHT;
+                            case 'D': return SHIFT_ARROW_LEFT;
                         }
                     }
-            }else{ // handling arrow keys
-                switch (s[1]) {
+                } else if (seq2[0] == '~') {
+                    // Page up/down, home, end, and delete
+                    switch (seq[1]) {
+                        case '1': return HOME_KEY;
+                        case '4': return END_KEY;
+                        case '3': return DEL_KEY;
+                        case '5': return PAGE_UP;
+                        case '6': return PAGE_DOWN;
+                        case '7': return HOME_KEY;
+                        case '8': return END_KEY;
+                    }
+                }
+            } else {
+                // Handle simple arrow keys
+                switch (seq[1]) {
                     case 'A': return ARROW_UP;
                     case 'B': return ARROW_DOWN;
                     case 'C': return ARROW_RIGHT;
@@ -197,43 +227,19 @@ int editorReadKey(){
                     case 'F': return END_KEY;
                 }
             }
-        }else if(s[0]=='O'){
-            switch (s[1]){
+        } else if (seq[0] == 'O') {
+            switch (seq[1]) {
                 case 'H': return HOME_KEY;
                 case 'F': return END_KEY;
             }
         }
-        return '\x1b';
+
+        return '\x1b'; // Return escape character if it's not a recognized sequence
     }
 
-
-    // Handle mouse events
-    if (c == '\x1b' && read(STDIN_FILENO, &c, 1) == 1 && c == '[') {
-        char button_info[3];
-        if (read(STDIN_FILENO, &button_info[0], 3) == 3) {
-            int button = button_info[0] - 32; // Button number
-            int y = button_info[1] - ' ';      // Y coordinate
-            int x = button_info[2] - ' ';      // X coordinate
-
-            // Process button click here (you can add more logic based on button pressed)
-            switch(button) {
-                case 0: // Left button clicked
-                    mvprintw(y, x, "Left mouse button clicked at (%d, %d)", x, y);
-                    break;
-                case 1: // Middle button clicked
-                    mvprintw(y, x, "Middle mouse button clicked at (%d, %d)", x, y);
-                    break;
-                case 2: // Right button clicked
-                    mvprintw(y, x, "Right mouse button clicked at (%d, %d)", x, y);
-                    break;
-            }
-            refresh(); 
-            return 10; 
-        }
-    }
-
-    return c;
+    return c;  // Return the character read if it's not an escape sequence
 }
+
 
 int getCursorPosition(int *rows, int *cols){
     // The n command can be used to query the terminal for status information (arg 6 used to return window size (status)).
@@ -518,7 +524,7 @@ void editorDrawStatusMessage(struct ab_buf *b){
 
     if (len > Ed.screenCols) len = Ed.screenCols;
     
-    if (len && time(NULL) - Ed.statusmsg_time < 5){
+    if (len && time(NULL) - Ed.statusmsg_time < STATUS_DISPLAY_TIME){
         ab_append(b, Ed.statusmsg, len);
     }
 }
@@ -529,7 +535,7 @@ void editorDrawStatusBar(struct ab_buf *b){
     // printing file name
     char status[80], curStatus[80];
     int len = snprintf(status, sizeof(status), "%.20s - %d lines %s", Ed.filename, Ed.numRows, Ed.dirty ? "(modified)" : "");
-    int rlen = snprintf(curStatus, sizeof(curStatus), "%d/%d - Cx:%d Rx:%d Xoff:%d", Ed.cy+1, Ed.numRows, Ed.cx, Ed.rx, Ed.scrollXOffset);
+    int rlen = snprintf(curStatus, sizeof(curStatus), "%d/%d - Cx:%d Rx:%d [sx:%d,ex:%d]", Ed.cy+1, Ed.numRows, Ed.cx, Ed.rx, Ed.sx, Ed.ex);
      
 
     ab_append(b, status, len);
@@ -555,11 +561,10 @@ void editorDrawLineNos(struct ab_buf *b, int id){
     // ab_append(b, "\x1b[4m",  4); // underline
 
     char s[20]; 
-    snprintf(s, sizeof(s), "%4d", Ed.row[id].lineNo); 
-    ab_append(b, s, 4); 
+    snprintf(s, sizeof(s), "%*d", LINENO_BAR_WIDTH, Ed.row[id].lineNo); 
+    ab_append(b, s, LINENO_BAR_WIDTH); 
     
     ab_append(b, "\x1b[m", 3);
-
 }
 
 void editorDrawRows(struct ab_buf *b) {
@@ -699,7 +704,6 @@ void editorRefreshScreen(){
     ab_append(&b, "\x1b[?25h", 6); // enable pointer
     
     write(STDOUT_FILENO, b.buf, b.len); //finally writing buffer to stdout
-    
     
     ab_free(&b);
 }
@@ -865,6 +869,12 @@ void editorSearch(){
 /* ----- input processing ----- */
 
 void editorMoveCursor(int key) {
+    // handle selected data ends
+    if(!Ed.copied && (key==SHIFT_ARROW_DOWN||key==SHIFT_ARROW_UP||key==SHIFT_ARROW_LEFT||key==SHIFT_ARROW_RIGHT)){
+        Ed.copied=1;
+        Ed.sx = Ed.cx;
+        Ed.sy = Ed.cy;
+    }
 
     // storing current row to avoid moving towards
     // right of the content in line without pressing space.
@@ -875,12 +885,14 @@ void editorMoveCursor(int key) {
 
     switch (key) {
         case ARROW_UP:
+        case SHIFT_ARROW_UP:
             if(Ed.cy > 0){
                 Ed.cy--;
             }
             break;
 
         case ARROW_LEFT:
+        case SHIFT_ARROW_LEFT:
             if(Ed.cx > 0){
                 Ed.cx--;
             }else if(Ed.cy > 0){
@@ -890,12 +902,14 @@ void editorMoveCursor(int key) {
             break;
 
         case ARROW_DOWN:
-            if(Ed.cy < Ed.numRows){ // to allow cursor to go till end of file instead just end of screen!
+        case SHIFT_ARROW_DOWN:
+            if(Ed.cy < Ed.numRows-1){ // to allow cursor to go till end of file instead just end of screen!
                 Ed.cy++;
             }
             break;
             
         case ARROW_RIGHT:
+        case SHIFT_ARROW_RIGHT:
             if(curRow){
                 if(Ed.cx < curRow->size){
                     Ed.cx++;
@@ -917,6 +931,56 @@ void editorMoveCursor(int key) {
     }else curRow = NULL;
 
     if(curRow && Ed.cx > curRow->size)Ed.cx = curRow->size;
+
+
+}
+
+void editorUpdateSelectionEndPoints(){
+    
+    if(Ed.copied){
+        Ed.ex = Ed.cx;
+        Ed.ey = Ed.cy;
+
+        int len = 0;
+        if(Ed.sy==Ed.ey){
+            if(Ed.sx > Ed.ex){ // swap
+                int tmp = Ed.sx;
+                Ed.sx = Ed.ex;
+                Ed.ex = tmp;
+            }
+
+            len = Ed.ex - Ed.sx + 1;
+            Ed.copiedDataLen = len;
+
+            Ed.copiedData = malloc(len+1);
+            memmove(&Ed.copiedData, &Ed.row[Ed.sy].data[Ed.sx], len);
+            
+            // editorSetStatusMessage("%s", &Ed.copiedData, Ed.copiedDataLen);
+            
+        }else{
+            if(Ed.sy > Ed.ey){ // swap
+                int tmp = Ed.sy;
+                Ed.sy = Ed.ey;
+                Ed.ey = tmp;
+
+                tmp = Ed.sx;
+                Ed.sx = Ed.ex;
+                Ed.ex = tmp;
+            }
+
+            len = (Ed.row[Ed.sx].size-Ed.sx)+Ed.ex  + 1;
+            Ed.copiedDataLen = len;
+
+            Ed.copiedData = malloc(len+1);
+            memmove(&Ed.copiedData, &Ed.row[Ed.sy].data[Ed.sx], len);
+            
+            // editorSetStatusMessage("%s", &Ed.copiedData, Ed.copiedDataLen);
+
+            
+        }
+    }else{
+
+    }
 }
 
 void editorProcessKey(){
@@ -928,7 +992,7 @@ void editorProcessKey(){
         case CTRL_KEY('f'):
             editorSearch();
             break;
-            
+             
         case CTRL_KEY('s'):
             editorSaveFile();
             break;
@@ -988,6 +1052,27 @@ void editorProcessKey(){
             if (Ed.cy < Ed.numRows)
                 Ed.cx = Ed.row[Ed.cy].size;
             break;
+
+        case SHIFT_ARROW_UP:
+            editorMoveCursor(c);
+            editorUpdateSelectionEndPoints();
+            break;
+        case SHIFT_ARROW_DOWN:
+            editorMoveCursor(c);
+            editorUpdateSelectionEndPoints();
+        
+            break;
+        case SHIFT_ARROW_RIGHT:
+            editorMoveCursor(c);
+            editorUpdateSelectionEndPoints();
+        
+            break;
+        case SHIFT_ARROW_LEFT:
+            editorMoveCursor(c);
+            editorUpdateSelectionEndPoints();
+        
+            break;
+
         default:
             editorInsertChar(c);
             break;
@@ -1039,9 +1124,19 @@ char *editorPrompt(char *prompt, void (*callback)(char*, int)) {
 
 void initEditor() {
 
+    // selected text
+    Ed.sx = 0;
+    Ed.sy = 0;
+    Ed.ex = 0;
+    Ed.ey = 0;
+    Ed.copiedData = NULL;
+    Ed.copied = 0;
+    Ed.copiedDataLen = 0;
+
     Ed.rx = 0;
     Ed.cx = 0;
     Ed.cy = 0;
+    
     Ed.numRows = 0;
     Ed.row=NULL;  
     Ed.scrollXOffset = 0;
@@ -1050,11 +1145,6 @@ void initEditor() {
     Ed.statusmsg[0] = '\0';
     Ed.statusmsg_time = 0;
     Ed.dirty = 0;
-    
-    // to detect mouse ptr 
-    initscr();
-    curs_set(0);
-    mousemask(ALL_MOUSE_EVENTS, NULL);
 
 
     if (getWindowSize(&Ed.screenRows, &Ed.screenCols) == -1) {
