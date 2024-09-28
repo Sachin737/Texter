@@ -72,8 +72,8 @@ struct editorConfig Ed;
 #define TEXTER_VERSION "0.0.1"
 #define TAB_SIZE 7
 #define TEXTER_QUIT_CONFIRM 2
-#define LINENO_BAR_WIDTH 4
 #define STATUS_DISPLAY_TIME 1
+#define LINENO_BAR_WIDTH 4 
 
 enum editorKey {
     BACKSPACE = 127,
@@ -111,6 +111,16 @@ void debugLog(const char *format, ...) {
 
 
 /* ----- terminal functions ----- */
+
+int GetLineNoBarWidth(){
+    int width=0;
+    int TotalLine = Ed.numRows;
+    while(TotalLine){
+        width++;
+        TotalLine/=10;
+    }
+    return width;
+}
 
 void die(const char* s){
     // to adjust cursor position and screen clear when program stops
@@ -349,11 +359,11 @@ int editorCxToRx(erow *line, int cx){
         }
         rx++;
     }
-    return rx+LINENO_BAR_WIDTH;
+    return rx+GetLineNoBarWidth();
 }
 
 int editorRxToCx(erow *line, int rx){
-    int cur_rx = LINENO_BAR_WIDTH;
+    int cur_rx = GetLineNoBarWidth();
     int i;
     for(i=0;i<line->size;i++){
         if(line->data[i]=='\t'){
@@ -606,8 +616,8 @@ void editorDrawLineNos(struct ab_buf *b, int id){
     // ab_append(b, "\x1b[4m",  4); // underline
 
     char s[20]; 
-    snprintf(s, sizeof(s), "%*d", LINENO_BAR_WIDTH, Ed.row[id].lineNo); 
-    ab_append(b, s, LINENO_BAR_WIDTH); 
+    snprintf(s, sizeof(s), "%*d", GetLineNoBarWidth(), Ed.row[id].lineNo); 
+    ab_append(b, s, GetLineNoBarWidth()); 
     
     ab_append(b, "\x1b[m", 3);
 }
@@ -635,7 +645,7 @@ void editorDrawRows(struct ab_buf *b) {
                 
                 int padding = (Ed.screenCols - welcomelen) / 2;
                 if (padding) {
-                    ab_append(b, "   ~", 4);
+                    ab_append(b, "~", GetLineNoBarWidth());
                     padding--;
                 }
 
@@ -645,7 +655,7 @@ void editorDrawRows(struct ab_buf *b) {
                 
                 ab_append(b, welcome, welcomelen);
             } else { // printing tildes
-                ab_append(b, "   ~", 4);
+                ab_append(b, "~", GetLineNoBarWidth());
             }
 
             ab_append(b, "\x1b[m", 3);
@@ -700,13 +710,13 @@ void editorScroll() {
     }
 
 
-    if (Ed.rx < Ed.scrollXOffset + LINENO_BAR_WIDTH) {
-        Ed.scrollXOffset = Ed.rx-LINENO_BAR_WIDTH;
+    if (Ed.rx < Ed.scrollXOffset + GetLineNoBarWidth()) {
+        Ed.scrollXOffset = Ed.rx-GetLineNoBarWidth();
     }
 
     // same thing for scroll down, [to view content below when scrolling down]
-    if (Ed.rx >= Ed.scrollXOffset + Ed.screenCols + LINENO_BAR_WIDTH) {
-        Ed.scrollXOffset = Ed.rx - Ed.screenCols + 1 - + LINENO_BAR_WIDTH;
+    if (Ed.rx >= Ed.scrollXOffset + Ed.screenCols + GetLineNoBarWidth()) {
+        Ed.scrollXOffset = Ed.rx - Ed.screenCols + 1 - GetLineNoBarWidth();
     }
 }
 
@@ -1253,8 +1263,7 @@ void initEditor() {
         die("getWindowSize");
     }
     Ed.screenRows -= 2;
-    Ed.screenCols -= LINENO_BAR_WIDTH;
-
+    Ed.screenCols -= 4;
 }
 
 int main(int argc, char *argv[]){
