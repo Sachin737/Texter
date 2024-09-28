@@ -1037,6 +1037,35 @@ void editorMoveCursor(int key) {
 
 }
 
+void editorDeleteSelectedData(){
+    // Calculate the actual length without '\r', '\n', and '\0'
+    int actualLen = 0;
+    for (int i = 0; i < Ed.selectedDataLen; i++) {
+        char ch = Ed.selectedData[i];
+        if (ch != '\n' && ch != '\0') {
+            actualLen++;
+        }
+    }
+
+    // set starting pointer to 
+    // whichever is later in text file
+    // because backspace move in this '<--' direction.
+    if(Ed.sy==Ed.ey){
+        if(Ed.sx > Ed.ex){
+            Ed.cx = Ed.sx;
+        }
+    }else if(Ed.sy > Ed.ey){
+        Ed.cx = Ed.sx;
+        Ed.cy = Ed.sy;
+    }
+
+    // using actualLen to remove chars
+    editorMoveCursor(ARROW_RIGHT);
+    while (actualLen--) {
+        editorDeleteChar(); 
+    }
+}
+
 void editorUpdateSelectedData() {
     /*
         Main idea:
@@ -1146,42 +1175,19 @@ void editorProcessKey(){
         case BACKSPACE:
         case CTRL_KEY('h'):
         case DEL_KEY:
-            if(Ed.selected && c==BACKSPACE){
-                
-                // Calculate the actual length without '\r', '\n', and '\0'
-                int actualLen = 0;
-                for (int i = 0; i < Ed.selectedDataLen; i++) {
-                    char ch = Ed.selectedData[i];
-                    if (ch != '\n' && ch != '\0') {
-                        actualLen++;
-                    }
-                }
-
-                // set starting pointer to 
-                // whichever is later in text file
-                // because backspace move in this '<--' direction.
-                if(Ed.sy==Ed.ey){
-                    if(Ed.sx > Ed.ex){
-                        Ed.cx = Ed.sx;
-                    }
-                }else if(Ed.sy > Ed.ey){
-                    Ed.cx = Ed.sx;
-                    Ed.cy = Ed.sy;
-                }
-
-                // using actualLen to remove chars
-                editorMoveCursor(ARROW_RIGHT);
-                while (actualLen--) {
-                    editorDeleteChar(); 
-                }
-                break;
+            if(Ed.selected && c==BACKSPACE) editorDeleteSelectedData();
+            else{
+                // because del key delete current char at cursor pos.
+                if(c==DEL_KEY) editorMoveCursor(ARROW_RIGHT);
+                editorDeleteChar();
             }
-
-            // because del key delete current char at cursor pos.
-            if(c==DEL_KEY) editorMoveCursor(ARROW_RIGHT);
-            editorDeleteChar();
             break;
-        
+
+        case CTRL_KEY('z'):
+            // restore
+            
+
+            break;        
         case CTRL_KEY('l'): // to refresh screen
         case '\x1b': //escape
             // ignoring!
