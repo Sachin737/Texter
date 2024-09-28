@@ -520,6 +520,27 @@ void editorInsertNewLine(){
 
 /* ----- output processing ----- */
 
+void editorPasteData(){ 
+    if (Ed.copied) { 
+        int j = 0; 
+
+        while (Ed.copiedData[j] != '\0') {
+            char currentChar = Ed.copiedData[j];
+
+            if (currentChar == '\r' && Ed.copiedData[j + 1] == '\n') {
+                editorInsertNewLine();
+                j += 2;
+                continue;
+            }
+
+            // insert char at Ed.cx
+            editorInsertCharToRow(&Ed.row[Ed.cy], Ed.cx, currentChar);
+            Ed.cx++;  
+            j++;
+        }
+    }
+}
+
 void editorSetStatusMessage(char *s, ...){ // variadic func.
     /*
         vsnprintf : its used to store data in buffer, but when input
@@ -950,7 +971,7 @@ void editorMoveCursor(int key) {
 
 }
 
-void editorUpdateSelectionEndPoints() {
+void editorUpdateSelectedData() {
     /*
         Main idea:
         I keep Ed.sx,Ed.sy always as the point from where
@@ -981,9 +1002,10 @@ void editorUpdateSelectionEndPoints() {
 
             if(Ed.ey != Ed.sy){
                 len = Ed.row[(Ed.ey<Ed.sy?Ed.ey:Ed.sy)].size - (Ed.ey<Ed.sy?Ed.ex:Ed.sx);
-                Ed.selectedData = malloc(len+1);
+                Ed.selectedData = malloc(len+2);
                 
                 memmove(Ed.selectedData, &Ed.row[(Ed.ey<Ed.sy?Ed.ey:Ed.sy)].data[(Ed.ey<Ed.sy?Ed.ex:Ed.sx)], len);
+                Ed.selectedData[len++] = '\r';
                 Ed.selectedData[len++] = '\n';
 
             }else{
@@ -998,11 +1020,14 @@ void editorUpdateSelectionEndPoints() {
             // In between
             for (int i = (Ed.ey<Ed.sy?Ed.ey:Ed.sy) + 1; i < (Ed.ey<Ed.sy?Ed.sy:Ed.ey); i++) {
                 int prevLen = len;
-                len += Ed.row[i].size;
+
+                int ad = Ed.row[i].size;
+                len += ad;
                 
-                Ed.selectedData = realloc(Ed.selectedData, len+1);
-                memmove(Ed.selectedData + prevLen, Ed.row[i].data, Ed.row[i].size);
+                Ed.selectedData = realloc(Ed.selectedData, len+2);
+                memmove(Ed.selectedData + prevLen, Ed.row[i].data, ad);
                 
+                Ed.selectedData[len++] = '\r';
                 Ed.selectedData[len++] = '\n';
 
                 
@@ -1065,9 +1090,6 @@ void editorProcessKey(){
             break;
 
         case CTRL_KEY('q'):
-
-            debugLog("selected Data:\r\n%s", Ed.copiedData);
-
             if(Ed.dirty && quit_cntr){
                 editorSetStatusMessage("WARNING!!! File has unsaved changes."
                 "Press Ctrl-Q %d more times to quit.", quit_cntr);   
@@ -1106,6 +1128,12 @@ void editorProcessKey(){
                 Ed.cx = Ed.row[Ed.cy].size;
             break;
         
+        // Paste text
+        case CTRL_KEY('v'):
+            editorPasteData();
+            break;
+
+        // Copy text
         case CTRL_KEY('c'):
             if(Ed.selected){ // selected text copied with ctrl+c
                 Ed.copied = 1;
@@ -1120,7 +1148,7 @@ void editorProcessKey(){
         case SHIFT_ARROW_RIGHT:
         case SHIFT_ARROW_LEFT:
             editorMoveCursor(c);
-            editorUpdateSelectionEndPoints();
+            editorUpdateSelectedData();
             break;
 
         default:
@@ -1143,6 +1171,8 @@ void editorProcessKey(){
         Ed.selected = 0;
         Ed.selectedData = NULL;
         Ed.selectedDataLen = 0;
+
+        // debugLog("%d|\r\n%s\r\n%d|\r\n%d|\r\n%s\r\n%d|\r\n", Ed.selected, Ed.selectedData, Ed.selectedDataLen, Ed.copied, Ed.copiedData, Ed.copiedDataLen);
     }
 }
 
