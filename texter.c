@@ -31,6 +31,7 @@ typedef struct erow
  
 
 struct editorConfig {
+    int START;
     struct termios orig_termios; // terminal attributes (basically terminal settings' attr)can be read in termios struct
     int screenRows;
     int screenCols;
@@ -73,7 +74,7 @@ struct editorConfig Ed;
 #define TAB_SIZE 7
 #define TEXTER_QUIT_CONFIRM 2
 #define STATUS_DISPLAY_TIME 1
-#define LINENO_BAR_WIDTH 4 
+// #define LINENO_BAR_WIDTH 4 
 
 enum editorKey {
     BACKSPACE = 127,
@@ -636,7 +637,7 @@ void editorDrawRows(struct ab_buf *b) {
             ab_append(b, "\x1b[38;5;16m", 10); // text
 
             // we only show wlcm msg when user open empty editor
-            if (y == Ed.screenRows / 3 && Ed.numRows == 0) {
+            if (y == Ed.screenRows / 2 && !Ed.START) {
 
                 char welcome[80];
                 int welcomelen = snprintf(welcome, sizeof(welcome), "TEXTER -- version %s", TEXTER_VERSION);
@@ -1062,6 +1063,7 @@ void editorUpdateSelectedData() {
 
 void editorProcessKey(){
     int c = editorReadKey();
+    Ed.START=1;
     static int quit_cntr = TEXTER_QUIT_CONFIRM;
     
     // handle selected data ends
@@ -1232,6 +1234,7 @@ char *editorPrompt(char *prompt, void (*callback)(char*, int)) {
 /* ----- main ----- */
 
 void initEditor() {
+    Ed.START=0;
 
     // selected text
     Ed.sx = 0;
