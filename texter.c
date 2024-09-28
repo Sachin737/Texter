@@ -74,7 +74,7 @@ struct editorConfig Ed;
 #define TAB_SIZE 7
 #define TEXTER_QUIT_CONFIRM 2
 #define STATUS_DISPLAY_TIME 1
-// #define LINENO_BAR_WIDTH 4 
+// [for colors check ANSI color codes]
 
 enum editorKey {
     BACKSPACE = 127,
@@ -665,8 +665,8 @@ void editorDrawRows(struct ab_buf *b) {
         }else{
             editorDrawLineNos(b, realY);
 
-            // setting screen bg color
-            ab_append(b, "\x1b[48;5;17m", 10);
+            // setting screen bg color to bluish
+            ab_append(b, "\x1b[48;5;53m", 10);
 
             int len = Ed.row[realY].rSize - Ed.scrollXOffset;
 
@@ -678,6 +678,48 @@ void editorDrawRows(struct ab_buf *b) {
 
             // iterating char by char to detect digits
             for(int i=0;i<len;i++){
+
+                // check if its currently selected or not
+                // to paint it in color
+                if(Ed.selected){
+                    // swap if backward/upward copied!
+                    int stX = Ed.sx, stY = Ed.sy, enX = Ed.ex, enY = Ed.ey;
+                    if(stY > enY){
+                        int tmp = stY;
+                        stY = enY;
+                        enY = tmp;
+                        tmp = stX;
+                        stX = enX;
+                        enX = tmp;
+                    }else if(stY==enY){
+                        if(stX > enX){
+                            int tmp = stX;
+                            stX = enX;
+                            enX = tmp;
+                        }
+                    }
+
+                    int cx =  i+Ed.scrollXOffset;
+
+                    if(realY==stY){ 
+                        if((stY==enY && cx >= stX && cx <= enX) || (stY<enY && cx >= stX)){
+                            // paint
+                            ab_append(b, "\x1b[48;5;15m", 10); // bg
+                            ab_append(b, "\x1b[38;5;16m", 10); // text
+                        }
+                    }else if(realY==enY){
+                        if(cx <= enX){
+                            // paint
+                            ab_append(b, "\x1b[48;5;15m", 10); // bg
+                            ab_append(b, "\x1b[38;5;16m", 10); // text
+                        }
+                    }else if(realY<=enY && realY>=stY){
+                        // paint
+                        ab_append(b, "\x1b[48;5;15m", 10); // bg
+                        ab_append(b, "\x1b[38;5;16m", 10); // text
+                    }
+                }
+
                 if(isdigit(c[i])){  // coloring digits
                     ab_append(b, "\x1b[36m", 5);
                     ab_append(b, &c[i], 1);
@@ -685,6 +727,11 @@ void editorDrawRows(struct ab_buf *b) {
                 }else{
                     ab_append(b, &c[i], 1);
                 }
+
+                // again setting screen bg color to bluish
+                // and text white
+                ab_append(b, "\x1b[48;5;53m", 10); // bg
+                ab_append(b, "\x1b[38;5;15m", 10); // text
             }
         }
 
@@ -740,6 +787,12 @@ void editorRefreshScreen(){
     struct ab_buf b = ab_BUF_INIT;
     
     ab_append(&b, "\x1b[?25l", 6); // disable pointer
+
+    // set ptr color
+    ab_append(&b, "\x1b]12;#b3b3b3\x1b\\", 16);
+
+    // set cursor style 
+    // ab_append(&b, "\x1b[5 q", 5);
 
     // this will adjust the cursor position to top-left
     // read here about '[H': https://vt100.net/docs/vt100-ug/chapter3.html#CUP
@@ -1211,7 +1264,7 @@ char *editorPrompt(char *prompt, void (*callback)(char*, int)) {
             if(callback) callback(buf, c);
             free(buf);
 
-            return NULL; // will cause curosr position to reset! 
+            return NULL; // will cause cursor position to reset! 
         } else if (c == '\r') {
             if (buflen != 0) {
                 editorSetStatusMessage("");
@@ -1234,6 +1287,7 @@ char *editorPrompt(char *prompt, void (*callback)(char*, int)) {
 /* ----- main ----- */
 
 void initEditor() {
+    
     Ed.START=0;
 
     // selected text
