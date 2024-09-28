@@ -28,7 +28,7 @@ typedef struct erow
 
     int lineNo;
 } erow;
-
+ 
 
 struct editorConfig {
     struct termios orig_termios; // terminal attributes (basically terminal settings' attr)can be read in termios struct
@@ -53,8 +53,12 @@ struct editorConfig {
     int dirty;
 
     // to keep track of selected text
-    int copied;
+    int selected;
     int sx,sy,ex,ey; // cords of selection
+    char* selectedData;
+    int selectedDataLen;
+    
+    int copied;
     char* copiedData;
     int copiedDataLen;
 };
@@ -87,6 +91,23 @@ enum editorKey {
     SHIFT_ARROW_RIGHT,
     SHIFT_ARROW_LEFT,
 };
+
+/* ----- DEBUG functions ----- */
+
+void debugLog(const char *format, ...) {
+    FILE *logFile = fopen("debug_log.txt", "a"); // Append mode to keep previous logs
+    if (logFile == NULL) {
+        return; // If the file can't be opened, exit the function
+    }
+
+    va_list args;
+    va_start(args, format);
+    vfprintf(logFile, format, args);
+    va_end(args);
+
+    fprintf(logFile, "\n"); // Add a new line after each log
+    fclose(logFile);
+}
 
 
 /* ----- terminal functions ----- */
@@ -499,6 +520,27 @@ void editorInsertNewLine(){
 
 /* ----- output processing ----- */
 
+void editorPasteData(){ 
+    if (Ed.copied) { 
+        int j = 0; 
+
+        while (Ed.copiedData[j] != '\0') {
+            char currentChar = Ed.copiedData[j];
+
+            if (currentChar == '\r' && Ed.copiedData[j + 1] == '\n') {
+                editorInsertNewLine();
+                j += 2;
+                continue;
+            }
+
+            // insert char at Ed.cx
+            editorInsertCharToRow(&Ed.row[Ed.cy], Ed.cx, currentChar);
+            Ed.cx++;  
+            j++;
+        }
+    }
+}
+
 void editorSetStatusMessage(char *s, ...){ // variadic func.
     /*
         vsnprintf : its used to store data in buffer, but when input
@@ -535,7 +577,7 @@ void editorDrawStatusBar(struct ab_buf *b){
     // printing file name
     char status[80], curStatus[80];
     int len = snprintf(status, sizeof(status), "%.20s - %d lines %s", Ed.filename, Ed.numRows, Ed.dirty ? "(modified)" : "");
-    int rlen = snprintf(curStatus, sizeof(curStatus), "%d/%d - Cx:%d Rx:%d [sx:%d,ex:%d]", Ed.cy+1, Ed.numRows, Ed.cx, Ed.rx, Ed.sx, Ed.ex);
+    int rlen = snprintf(curStatus, sizeof(curStatus), "%d/%d - Cx:%d Rx:%d [sy:%d,sx:%d]->[ey:%d,ex:%d]", Ed.cy+1, Ed.numRows,Ed.cx, Ed.rx,  Ed.sy+1, Ed.sx+1, Ed.ey+1, Ed.ex+1);
      
 
     ab_append(b, status, len);
@@ -869,12 +911,6 @@ void editorSearch(){
 /* ----- input processing ----- */
 
 void editorMoveCursor(int key) {
-    // handle selected data ends
-    if(!Ed.copied && (key==SHIFT_ARROW_DOWN||key==SHIFT_ARROW_UP||key==SHIFT_ARROW_LEFT||key==SHIFT_ARROW_RIGHT)){
-        Ed.copied=1;
-        Ed.sx = Ed.cx;
-        Ed.sy = Ed.cy;
-    }
 
     // storing current row to avoid moving towards
     // right of the content in line without pressing space.
@@ -935,57 +971,96 @@ void editorMoveCursor(int key) {
 
 }
 
-void editorUpdateSelectionEndPoints(){
-    
-    if(Ed.copied){
+void editorUpdateSelectedData() {
+    /*
+        Main idea:
+        I keep Ed.sx,Ed.sy always as the point from where
+        we started selecting text (with SHIFT+X).
+
+        then from Ed.ex,Ed.ey, even if any one is less that start 
+        cords, I take care of it while memmove data from 
+        row data to -> selectedData buffer.
+        how? by taking min of both wherever necessary!!
+    */
+
+    if (Ed.selected) {
         Ed.ex = Ed.cx;
-        Ed.ey = Ed.cy;
+        Ed.ey = Ed.cy; 
 
         int len = 0;
-        if(Ed.sy==Ed.ey){
-            if(Ed.sx > Ed.ex){ // swap
-                int tmp = Ed.sx;
-                Ed.sx = Ed.ex;
-                Ed.ex = tmp;
+        if (Ed.sy == Ed.ey) { // copying within single line
+
+            len = (Ed.ex>Ed.sx ? Ed.ex - Ed.sx: Ed.sx - Ed.ex) + 1;
+            Ed.selectedDataLen = len;
+
+            Ed.selectedData = malloc(len+1);
+            memmove(Ed.selectedData, &Ed.row[Ed.sy].data[(Ed.ex<Ed.sx?Ed.ex:Ed.sx)], len);
+            Ed.selectedData[len++] = '\0';
+
+        } else { // copying multiple lines
+            int len;
+
+            if(Ed.ey != Ed.sy){
+                len = Ed.row[(Ed.ey<Ed.sy?Ed.ey:Ed.sy)].size - (Ed.ey<Ed.sy?Ed.ex:Ed.sx);
+                Ed.selectedData = malloc(len+2);
+                
+                memmove(Ed.selectedData, &Ed.row[(Ed.ey<Ed.sy?Ed.ey:Ed.sy)].data[(Ed.ey<Ed.sy?Ed.ex:Ed.sx)], len);
+                Ed.selectedData[len++] = '\r';
+                Ed.selectedData[len++] = '\n';
+
+            }else{
+                len = (Ed.ex>Ed.sx ? Ed.ex - Ed.sx: Ed.sx - Ed.ex) + 1;
+                Ed.selectedData = malloc(len+1);
+
+                memmove(Ed.selectedData, &Ed.row[Ed.sy].data[(Ed.ex<Ed.sx?Ed.ex:Ed.sx)], len);                
+                Ed.selectedData[len++] = '\0';
+                    
             }
 
-            len = Ed.ex - Ed.sx + 1;
-            Ed.copiedDataLen = len;
+            // In between
+            for (int i = (Ed.ey<Ed.sy?Ed.ey:Ed.sy) + 1; i < (Ed.ey<Ed.sy?Ed.sy:Ed.ey); i++) {
+                int prevLen = len;
 
-            Ed.copiedData = malloc(len+1);
-            memmove(&Ed.copiedData, &Ed.row[Ed.sy].data[Ed.sx], len);
-            
-            // editorSetStatusMessage("%s", &Ed.copiedData, Ed.copiedDataLen);
-            
-        }else{
-            if(Ed.sy > Ed.ey){ // swap
-                int tmp = Ed.sy;
-                Ed.sy = Ed.ey;
-                Ed.ey = tmp;
+                int ad = Ed.row[i].size;
+                len += ad;
+                
+                Ed.selectedData = realloc(Ed.selectedData, len+2);
+                memmove(Ed.selectedData + prevLen, Ed.row[i].data, ad);
+                
+                Ed.selectedData[len++] = '\r';
+                Ed.selectedData[len++] = '\n';
 
-                tmp = Ed.sx;
-                Ed.sx = Ed.ex;
-                Ed.ex = tmp;
+                
             }
 
-            len = (Ed.row[Ed.sx].size-Ed.sx)+Ed.ex  + 1;
-            Ed.copiedDataLen = len;
-
-            Ed.copiedData = malloc(len+1);
-            memmove(&Ed.copiedData, &Ed.row[Ed.sy].data[Ed.sx], len);
+            // Last line
+            if(Ed.ey != Ed.sy){
+                len += ((Ed.ey<Ed.sy?Ed.sx:Ed.ex) + 1);
+                Ed.selectedData = realloc(Ed.selectedData, len+1);
+                memmove(Ed.selectedData + len - ((Ed.ey<Ed.sy?Ed.sx:Ed.ex) + 1), Ed.row[(Ed.ey<Ed.sy?Ed.sy:Ed.ey)].data, (Ed.ey<Ed.sy?Ed.sx:Ed.ex) + 1);
             
-            // editorSetStatusMessage("%s", &Ed.copiedData, Ed.copiedDataLen);
+                Ed.selectedData[len++] = '\0';
+                Ed.selectedDataLen = len;
 
-            
+            }
         }
-    }else{
-
     }
 }
+
 
 void editorProcessKey(){
     int c = editorReadKey();
     static int quit_cntr = TEXTER_QUIT_CONFIRM;
+    
+    // handle selected data ends
+    if(!Ed.selected && (c==SHIFT_ARROW_DOWN||c==SHIFT_ARROW_UP||c==SHIFT_ARROW_LEFT||c==SHIFT_ARROW_RIGHT)){
+        // we started shift+x operation 
+        Ed.selected=1;
+        Ed.sx = Ed.cx;
+        Ed.sy = Ed.cy;
+        Ed.ex = Ed.cx;
+        Ed.ey = Ed.cy;
+    }
 
     // Processing keyboard button
     switch (c){
@@ -1052,30 +1127,52 @@ void editorProcessKey(){
             if (Ed.cy < Ed.numRows)
                 Ed.cx = Ed.row[Ed.cy].size;
             break;
+        
+        // Paste text
+        case CTRL_KEY('v'):
+            editorPasteData();
+            break;
+
+        // Copy text
+        case CTRL_KEY('c'):
+            if(Ed.selected){ // selected text copied with ctrl+c
+                Ed.copied = 1;
+            }else{
+                // selected Data is NULL
+                Ed.copied = 0;
+            }
+            break;
 
         case SHIFT_ARROW_UP:
-            editorMoveCursor(c);
-            editorUpdateSelectionEndPoints();
-            break;
         case SHIFT_ARROW_DOWN:
-            editorMoveCursor(c);
-            editorUpdateSelectionEndPoints();
-        
-            break;
         case SHIFT_ARROW_RIGHT:
-            editorMoveCursor(c);
-            editorUpdateSelectionEndPoints();
-        
-            break;
         case SHIFT_ARROW_LEFT:
             editorMoveCursor(c);
-            editorUpdateSelectionEndPoints();
-        
+            editorUpdateSelectedData();
             break;
 
         default:
             editorInsertChar(c);
             break;
+    }
+
+    // handle select data
+    if(Ed.selected && c!=SHIFT_ARROW_DOWN &&  c!=SHIFT_ARROW_UP &&  c!=SHIFT_ARROW_LEFT &&  c!=SHIFT_ARROW_RIGHT){
+        // we left shift+x selection process
+        
+        if(Ed.copied){ // if copied, store it
+        
+            Ed.copiedData = malloc(Ed.selectedDataLen+1);
+            memmove(Ed.copiedData, Ed.selectedData, Ed.selectedDataLen);
+            Ed.copiedDataLen = Ed.selectedDataLen;
+            Ed.copiedData[Ed.copiedDataLen++]='\0';
+        }
+
+        Ed.selected = 0;
+        Ed.selectedData = NULL;
+        Ed.selectedDataLen = 0;
+
+        // debugLog("%d|\r\n%s\r\n%d|\r\n%d|\r\n%s\r\n%d|\r\n", Ed.selected, Ed.selectedData, Ed.selectedDataLen, Ed.copied, Ed.copiedData, Ed.copiedDataLen);
     }
 }
 
@@ -1129,8 +1226,11 @@ void initEditor() {
     Ed.sy = 0;
     Ed.ex = 0;
     Ed.ey = 0;
-    Ed.copiedData = NULL;
+    Ed.selected = 0;
+    Ed.selectedData = NULL;
+    Ed.selectedDataLen = 0;
     Ed.copied = 0;
+    Ed.copiedData = NULL;
     Ed.copiedDataLen = 0;
 
     Ed.rx = 0;
