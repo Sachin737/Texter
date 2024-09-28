@@ -1,2 +1,6 @@
 *.o
 *.out
+
+debug_log.txt
+test
+texter
