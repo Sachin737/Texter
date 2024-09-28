@@ -502,6 +502,10 @@ void editorDeleteChar(){
 void editorInsertNewLine(){
     if (Ed.cx == 0) { // pressing enter at line start
         editorInsertRow("", 0, Ed.cy);
+
+        if(Ed.numRows==1){ // means its new file with this empty line only
+            return;
+        }
     } else {
         erow *row = &Ed.row[Ed.cy];
 
@@ -577,8 +581,7 @@ void editorDrawStatusBar(struct ab_buf *b){
     // printing file name
     char status[80], curStatus[80];
     int len = snprintf(status, sizeof(status), "%.20s - %d lines %s", Ed.filename, Ed.numRows, Ed.dirty ? "(modified)" : "");
-    int rlen = snprintf(curStatus, sizeof(curStatus), "%d/%d - Cx:%d Rx:%d [sy:%d,sx:%d]->[ey:%d,ex:%d]", Ed.cy+1, Ed.numRows,Ed.cx, Ed.rx,  Ed.sy+1, Ed.sx+1, Ed.ey+1, Ed.ex+1);
-     
+    int rlen = snprintf(curStatus, sizeof(curStatus), "%d/%d", Ed.cy+1, Ed.numRows);
 
     ab_append(b, status, len);
 
@@ -626,8 +629,7 @@ void editorDrawRows(struct ab_buf *b) {
             if (y == Ed.screenRows / 3 && Ed.numRows == 0) {
 
                 char welcome[80];
-                int welcomelen = snprintf(welcome, sizeof(welcome),
-                    "TEXTER -- version %s", TEXTER_VERSION);
+                int welcomelen = snprintf(welcome, sizeof(welcome), "TEXTER -- version %s", TEXTER_VERSION);
                 if (welcomelen > Ed.screenCols) welcomelen = Ed.screenCols;
 
                 
@@ -1267,6 +1269,8 @@ int main(int argc, char *argv[]){
     
     if(argc >=2){
         editorOpenFile(argv[1]);
+    }else{
+        editorInsertNewLine();
     }
     
     editorSetStatusMessage("HELP: Ctrl-S : save | Ctrl-Q : quit | Ctrl-F : find");
