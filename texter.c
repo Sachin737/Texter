@@ -535,6 +535,55 @@ void editorInsertNewLine(){
 
 /* ----- output processing ----- */
 
+void editorPaintSelectedData(struct ab_buf* b,int i,int realY, erow* line){
+
+    int stX = Ed.sx, stY = Ed.sy, enX = Ed.ex, enY = Ed.ey;
+
+    // swap if backward/upward copied!
+    if(stY > enY){
+        int tmp = stY;
+        stY = enY;
+        enY = tmp;
+        tmp = stX;
+        stX = enX;
+        enX = tmp;
+    }else if(stY==enY){
+        if(stX > enX){
+            int tmp = stX;
+            stX = enX;
+            enX = tmp;
+        }
+    }
+
+
+    // render cursor positions
+    int stX_r = editorCxToRx (line, stX)-GetLineNoBarWidth();
+    int enX_r = editorCxToRx(line, enX)-GetLineNoBarWidth();
+    int rx = i;
+
+
+    if(realY==stY){ 
+        if((stY==enY && rx >= stX_r && rx <= enX_r) || (stY<enY && rx >= stX_r)){
+            // editorSetStatusMessage("%d,%d=>%d,%d | %d",stX,enX,stX_r,enX_r,rx);
+            // editorSetStatusMessage("%s", line->renderData);
+
+            // paint
+            ab_append(b, "\x1b[48;5;15m", 10); // bg
+            ab_append(b, "\x1b[38;5;16m", 10); // text
+        }
+    }else if(realY==enY){
+        if(rx <= enX_r){
+            // paint
+            ab_append(b, "\x1b[48;5;15m", 10); // bg
+            ab_append(b, "\x1b[38;5;16m", 10); // text
+        }
+    }else if(realY<=enY && realY>=stY){
+        // paint
+        ab_append(b, "\x1b[48;5;15m", 10); // bg
+        ab_append(b, "\x1b[38;5;16m", 10); // text
+    }
+}
+
 void editorPasteData(){ 
     if (Ed.copied) { 
         int j = 0; 
@@ -596,8 +645,8 @@ void editorDrawStatusBar(struct ab_buf *b){
 
     ab_append(b, status, len);
 
-    while (len < Ed.screenCols) {
-        if (Ed.screenCols - len == rlen) {
+    while (len < Ed.screenCols + GetLineNoBarWidth()) {
+        if (Ed.screenCols + GetLineNoBarWidth() - len == rlen) {
             ab_append(b, curStatus, rlen);
             break;
         } else {
@@ -667,6 +716,7 @@ void editorDrawRows(struct ab_buf *b) {
 
             // setting screen bg color to bluish
             ab_append(b, "\x1b[48;5;53m", 10);
+            ab_append(b, "\x1b[38;5;15m", 10); // text
 
             int len = Ed.row[realY].rSize - Ed.scrollXOffset;
 
@@ -679,54 +729,20 @@ void editorDrawRows(struct ab_buf *b) {
             // iterating char by char to detect digits
             for(int i=0;i<len;i++){
 
-                // check if its currently selected or not
-                // to paint it in color
+                // check if its currently selected or not.
+                // to paint it.
                 if(Ed.selected){
-                    // swap if backward/upward copied!
-                    int stX = Ed.sx, stY = Ed.sy, enX = Ed.ex, enY = Ed.ey;
-                    if(stY > enY){
-                        int tmp = stY;
-                        stY = enY;
-                        enY = tmp;
-                        tmp = stX;
-                        stX = enX;
-                        enX = tmp;
-                    }else if(stY==enY){
-                        if(stX > enX){
-                            int tmp = stX;
-                            stX = enX;
-                            enX = tmp;
-                        }
-                    }
-
-                    int cx =  i+Ed.scrollXOffset;
-
-                    if(realY==stY){ 
-                        if((stY==enY && cx >= stX && cx <= enX) || (stY<enY && cx >= stX)){
-                            // paint
-                            ab_append(b, "\x1b[48;5;15m", 10); // bg
-                            ab_append(b, "\x1b[38;5;16m", 10); // text
-                        }
-                    }else if(realY==enY){
-                        if(cx <= enX){
-                            // paint
-                            ab_append(b, "\x1b[48;5;15m", 10); // bg
-                            ab_append(b, "\x1b[38;5;16m", 10); // text
-                        }
-                    }else if(realY<=enY && realY>=stY){
-                        // paint
-                        ab_append(b, "\x1b[48;5;15m", 10); // bg
-                        ab_append(b, "\x1b[38;5;16m", 10); // text
-                    }
+                    editorPaintSelectedData(b,i,realY,&Ed.row[realY]);
                 }
 
                 if(isdigit(c[i])){  // coloring digits
-                    ab_append(b, "\x1b[36m", 5);
+                    // ab_append(b, "\x1b[36m", 5);
                     ab_append(b, &c[i], 1);
-                    ab_append(b, "\x1b[39m", 5);
+                    // ab_append(b, "\x1b[39m", 5);
                 }else{
                     ab_append(b, &c[i], 1);
                 }
+
 
                 // again setting screen bg color to bluish
                 // and text white
@@ -1241,8 +1257,14 @@ void editorProcessKey(){
         case CTRL_KEY('c'):
             if(Ed.selected){ // selected text copied with ctrl+c
                 Ed.copied = 1;
+
+                erow tmp;
+                tmp.data=Ed.selectedData;
+                tmp.size=Ed.selectedDataLen;
+                editorSetStatusMessage("Copied data: (%d,%d) to (%d,%d)",Ed.sy+1,editorCxToRx(&tmp, Ed.sx)-GetLineNoBarWidth()+1,Ed.ey+1,editorCxToRx(&tmp, Ed.ex)-GetLineNoBarWidth()+1);
             }else{
                 // selected Data is NULL
+                editorSetStatusMessage("Copied data: (blank)");
                 Ed.copied = 0;
             }
             break;
@@ -1376,7 +1398,7 @@ int main(int argc, char *argv[]){
         editorInsertNewLine();
     }
     
-    editorSetStatusMessage("HELP: Ctrl-S : save | Ctrl-Q : quit | Ctrl-F : find");
+    editorSetStatusMessage("HELP: Ctrl-S : save | Ctrl-Q : quit | Ctrl-F : find | Ctrl-C : copy | Ctrl-V : paste");
 
     while (1){
         editorRefreshScreen();
