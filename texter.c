@@ -736,16 +736,15 @@ void editorDrawRows(struct ab_buf *b) {
                 }
 
                 if(isdigit(c[i])){  // coloring digits
-                    // ab_append(b, "\x1b[36m", 5);
+                    ab_append(b, "\x1b[38;5;46m", 11); // text
                     ab_append(b, &c[i], 1);
-                    // ab_append(b, "\x1b[39m", 5);
+                    ab_append(b, "\x1b[39m", 5);
                 }else{
                     ab_append(b, &c[i], 1);
                 }
 
 
-                // again setting screen bg color to bluish
-                // and text white
+                // again setting screen bg color to bluish and text white
                 ab_append(b, "\x1b[48;5;53m", 10); // bg
                 ab_append(b, "\x1b[38;5;15m", 10); // text
             }
@@ -1406,4 +1405,6 @@ int main(int argc, char *argv[]){
     }
 
     return 0;
+
 }
+
