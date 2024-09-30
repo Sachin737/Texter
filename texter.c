@@ -362,20 +362,31 @@ int editorCxToRx(erow *line, int cx){
     }
     return rx+GetLineNoBarWidth();
 }
-
-int editorRxToCx(erow *line, int rx){
-    int cur_rx = GetLineNoBarWidth();
-    int i;
-    for(i=0;i<line->size;i++){
-        if(line->data[i]=='\t'){
-            cur_rx += TAB_SIZE - rx%(TAB_SIZE+1); 
+int editorRxToCx(erow *line, int rx) {
+    int cx = 0, i = 0;
+    
+    while(i<rx){
+        int cntTabs = 0;
+        while(i<rx && line->renderData[i]==' ')cntTabs++,i++;
+        if(cntTabs < 8){ // its not a Tab
+            cx+=cntTabs;
+        }else{ // its Tab
+            cntTabs/=8;
+            cx += cntTabs;
         }
-        cur_rx++;
-        if(cur_rx > rx) return i;
-    }
-    return i;
-}
 
+        if(i<rx){
+            cx++;
+            i++;
+        }
+    }
+
+    // char* s = malloc(10);
+    // snprintf(s, 10, "%d", cx); // Format specifier for an integer
+    // debugLog(s);
+    
+    return cx;
+}
 
 void editorUpdateRenderData(erow *line){
     free(line->renderData);
@@ -893,6 +904,7 @@ char* editorFileDataToString(int *buflen){
 void editorSaveFile(){
     if(Ed.filename==NULL){
         Ed.filename = editorPrompt("Save as: %s (ESC to cancel | Enter to save)",NULL);
+        
         if (Ed.filename == NULL) {
             editorRefreshScreen();
             editorSetStatusMessage("Save aborted");
