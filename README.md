@@ -5,7 +5,7 @@ Texter is a minimalistic text editor designed to run directly within the termina
 
 ## Features
 - **Cross-platform compatibility**: Works on any Unix-based system with terminal support.
-- **Simple terminal input handling**: Uses `termios` for capturing and managing terminal input.
+- **Simple terminal input handling**: Uses `termios` for capturing and managing terminal properties.
 - **Basic text manipulation**: Edit, save, copy, paste and manipulate text files with ease.
 - **Cursor tracking and scrolling**: Keep track of cursor positions and scroll efficiently through files.
 - **Status bar messages**: Display real-time status updates as you edit.
