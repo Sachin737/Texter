@@ -71,7 +71,7 @@ struct editorConfig Ed;
 #define CTRL_KEY(k) ((k) & 0x1f)  // 11111
 #define ab_BUF_INIT {NULL, 0}
 #define TEXTER_VERSION "0.0.1"
-#define TAB_SIZE 7
+#define TAB_SIZE 4
 #define TEXTER_QUIT_CONFIRM 2
 #define STATUS_DISPLAY_TIME 1
 // [for colors check ANSI color codes]
@@ -362,28 +362,19 @@ int editorCxToRx(erow *line, int cx){
     }
     return rx+GetLineNoBarWidth();
 }
+
 int editorRxToCx(erow *line, int rx) {
-    int cx = 0, i = 0;
+    int cx = 0, tmprx = 0;
     
-    while(i<rx){
-        int cntTabs = 0;
-        while(i<rx && line->renderData[i]==' ')cntTabs++,i++;
-        if(cntTabs < 8){ // its not a Tab
-            cx+=cntTabs;
-        }else{ // its Tab
-            cntTabs/=8;
-            cx += cntTabs;
+    for(int i=0;tmprx<rx;i++){
+        if(line->data[i]=='\t'){
+            // since all tabs dont take full TAB_SIZE,
+            // we decrease that part.
+            tmprx += TAB_SIZE - tmprx%(TAB_SIZE+1); 
         }
-
-        if(i<rx){
-            cx++;
-            i++;
-        }
+        cx++;
+        tmprx++;
     }
-
-    // char* s = malloc(10);
-    // snprintf(s, 10, "%d", cx); // Format specifier for an integer
-    // debugLog(s);
     
     return cx;
 }
@@ -832,6 +823,8 @@ void editorRefreshScreen(){
 
     // to position the cursor according to our cursor pos variables.
     char buf[32];
+
+    debugLog("%d, %d", Ed.cx, Ed.rx);
     snprintf(buf, sizeof(buf), "\x1b[%d;%dH", Ed.cy - Ed.scrollYOffset + 1, Ed.rx - Ed.scrollXOffset + 1);
     ab_append(&b, buf, strlen(buf));
 
@@ -969,10 +962,15 @@ void editorFallBackSearch(char* query, int keyPress){
         // ptr to matched substr in row->renderData
 
         if(ptr){
+            // debugLog("%s%d",row->data, row->size);
+
             last_match_y = current_y;
+
+            // Ed.rx = ;
 
             Ed.cy = current_y;
             Ed.cx = editorRxToCx(row,ptr - row->renderData);
+            
             Ed.scrollYOffset=Ed.numRows; // to make screen scroll to matched line
             break;
         }
@@ -1319,10 +1317,11 @@ char *editorPrompt(char *prompt, void (*callback)(char*, int)) {
     size_t buflen = 0;
     buf[0] = '\0';
     
+
     while (1) {
         editorSetStatusMessage(prompt, buf);
         editorRefreshScreen();
-
+        
         int c = editorReadKey();
 
         if (c == DEL_KEY || c == CTRL_KEY('h') || c == BACKSPACE) {
